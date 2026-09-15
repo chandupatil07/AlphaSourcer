@@ -35,6 +35,69 @@ function looksLikeLocation(value: string): boolean {
   return /,/.test(value) || /(area|region|district|greater)/i.test(value);
 }
 
+// Countries and cities used to anchor a location inside snippet prose.
+const LOCATION_COUNTRIES = new Set([
+  'india', 'united states', 'usa', 'united kingdom', 'uk', 'canada', 'australia',
+  'singapore', 'germany', 'france', 'netherlands', 'ireland', 'japan', 'china',
+  'united arab emirates', 'uae',
+]);
+
+const LOCATION_CITIES = new Set([
+  'bengaluru', 'bangalore', 'mumbai', 'bombay', 'delhi', 'new delhi', 'noida',
+  'gurgaon', 'gurugram', 'hyderabad', 'chennai', 'pune', 'kolkata', 'ahmedabad',
+  'jaipur', 'kochi', 'indore', 'coimbatore', 'chandigarh', 'nagpur', 'bhubaneswar',
+  'thiruvananthapuram', 'mysuru', 'mysore', 'vadodara', 'surat', 'lucknow',
+  'london', 'singapore', 'dubai', 'san francisco', 'seattle', 'new york',
+  'toronto', 'berlin', 'sydney',
+]);
+
+const trimTail = (value: string) => value.replace(/[.\s]+$/, '').trim();
+
+/**
+ * Recovers a location from snippet prose.
+ *
+ * Location used to be read only from `result.subtitle`. Serper stopped
+ * returning that field, so extraction silently fell to zero -- on a live run,
+ * 99 of 235 snippets said "Bengaluru, Karnataka, India" in plain text while not
+ * one candidate carried a location. With nothing to compare, the relevance
+ * gate treated every profile as location-unknown and let it through, so a
+ * "Bangalore only" brief was not enforced at all.
+ */
+function locationFromSnippet(snippet: string): string | null {
+  const text = clean(snippet);
+  if (!text) return null;
+
+  // "... Location: Bengaluru ..."
+  const labelled = text.match(/Location:\s*([^·•|]+)/i);
+  if (labelled) {
+    const value = trimTail(clean(labelled[1]));
+    if (value && value.length <= 60) return value;
+  }
+
+  // Comma runs anchored on a country or a city. Google truncates snippets
+  // ("Bengaluru, Karnataka, Ind..."), so a city anchor is needed too.
+  for (const part of text.split(/[·•|]/)) {
+    const segments = part.split(',').map((seg) => trimTail(clean(seg))).filter(Boolean);
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i].toLowerCase();
+      const isCountry = LOCATION_COUNTRIES.has(seg);
+      if (!isCountry && !LOCATION_CITIES.has(seg)) continue;
+      const from = isCountry ? Math.max(0, i - 2) : i;
+      const value = segments.slice(from, i + 1).join(', ');
+      if (value.length <= 60) return value;
+    }
+  }
+
+  // Last resort: a bare city mid-sentence ("... based in Bengaluru.").
+  for (const city of LOCATION_CITIES) {
+    if (new RegExp(`(^|[\\s(])${city}([\\s.,)]|$)`, 'i').test(text)) {
+      return city.replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+  }
+
+  return null;
+}
+
 /**
  * Google renders some LinkedIn results as "Experience: Acme · Education: X ·
  * Location: Y", and others mention the employer only in prose. Reading those
@@ -159,6 +222,11 @@ export function parseSearchResult(result: SearchResult): ParsedCandidate {
   // Fall back to the prose when the structured subtitle carried no employer.
   if (!currentOrganization) {
     currentOrganization = employerFromSnippet(result.snippet);
+  }
+
+  // Same for location, which the subtitle no longer supplies at all.
+  if (!location) {
+    location = locationFromSnippet(`${title} ${result.snippet}`);
   }
 
   const yearsExperience = yearsFromSnippet(`${title} ${result.snippet}`);
