@@ -149,6 +149,18 @@ function acceptedLocations(brief: SearchBrief): { terms: Set<string>; cityLevel:
 }
 
 /**
+ * Whole-word match. Substring matching let a short accepted term match inside
+ * an ordinary word: the country code "IN" appears in "united kINgdom",
+ * "virgINia" and "illINois", so an India-only brief silently accepted
+ * profiles from anywhere.
+ */
+function matchesTerm(haystack: string, term: string): boolean {
+  if (!term) return false;
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|\\s)${escaped}(\\s|$)`).test(haystack);
+}
+
+/**
  * Only rejects a location we can positively identify as elsewhere. An unknown
  * or unparseable location is never treated as a mismatch.
  */
@@ -163,7 +175,7 @@ export function locationMismatch(
   if (!loc) return false;
 
   for (const term of terms) {
-    if (loc.includes(term)) return false;
+    if (matchesTerm(loc, term)) return false;
   }
 
   // Country-level briefs still accept a profile that names only its city.
@@ -330,7 +342,12 @@ function scoreEmployer(
   // Unknown is neutral: never a free pass, never a rejection.
   if (!candidate.currentOrganization) return { score: 50, note: 'employer not listed' };
 
-  return { score: 10, note: `at ${candidate.currentOrganization}` };
+  // A named employer is a PREFERENCE, not a requirement. Scoring a non-match
+  // at 10 on a weight of 30 turned "we would like people from X" into
+  // "reject everyone not at X", discarding qualified candidates for a reason
+  // the recruiter never asked for. Matching still lifts (100 / 80 / 70);
+  // not matching is now neutral, the same as an unlisted employer.
+  return { score: 50, note: `at ${candidate.currentOrganization}` };
 }
 
 function scoreExperience(
@@ -365,22 +382,62 @@ function scoreExperience(
   return { score: 10, note: `${years.toFixed(1)} yrs vs ${lo}-${hi} wanted` };
 }
 
+/**
+ * Scores the skills we could actually observe.
+ *
+ * A Google snippet is about 160 characters of name, headline and city. It
+ * practically never lists skills, so counting misses against the full
+ * requirement scored almost every candidate near zero on this dimension and
+ * handed the ranking to whoever happened to have a keyword in their headline.
+ *
+ * Two sources of evidence are used instead:
+ *   confirmed  - a search that demanded the skill returned this profile, so
+ *                Google verified it against the whole indexed page
+ *   in text    - the skill appears in the snippet or job title
+ *
+ * Skills with neither are UNTESTED, and are excluded from the denominator
+ * rather than counted as failures. Unknown is not the same as absent.
+ */
 function scoreDomain(
-  candidate: { currentDesignation: string | null; searchSnippet: string },
+  candidate: {
+    currentDesignation: string | null;
+    searchSnippet: string;
+    confirmedSkills?: string[] | null;
+  },
   brief: SearchBrief
 ): number {
   const required = [...brief.mustHaveSkills, ...brief.educationQualifications];
   if (required.length === 0) return 60;
 
+  const confirmed = new Set(
+    (candidate.confirmedSkills ?? []).map((s) => normalize(s))
+  );
   const text = normalize(`${candidate.currentDesignation ?? ''} ${candidate.searchSnippet}`);
-  const hits = required.filter((r) => {
-    const n = normalize(r);
-    if (n.length < 2) return false;
-    const singular = n.endsWith('s') ? n.slice(0, -1) : n;
-    return text.includes(n) || text.includes(singular);
-  });
 
-  return Math.round((hits.length / required.length) * 100);
+  let met = 0;
+  let testable = 0;
+
+  for (const requirement of required) {
+    const n = normalize(requirement);
+    if (n.length < 2) continue;
+
+    if (confirmed.has(n)) {
+      met += 1;
+      testable += 1;
+      continue;
+    }
+
+    const singular = n.endsWith('s') ? n.slice(0, -1) : n;
+    if (text.includes(n) || text.includes(singular)) {
+      met += 1;
+      testable += 1;
+    }
+  }
+
+  // Nothing could be checked: stay neutral rather than inventing a verdict.
+  if (testable === 0) return 60;
+
+  return Math.round((met / testable) * 100);
 }
 
 /**
@@ -399,6 +456,7 @@ export function assessRelevance(
     location?: string | null;
     yearsExperience?: number | null;
     searchSnippet: string;
+    confirmedSkills?: string[] | null;
   },
   brief: SearchBrief
 ): RelevanceVerdict {

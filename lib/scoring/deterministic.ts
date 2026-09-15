@@ -8,6 +8,8 @@ export function calculateDeterministicScore(
     currentOrganization: string | null;
     location?: string | null;
     searchSnippet: string;
+    yearsExperience?: number | null;
+    confirmedSkills?: string[] | null;
   },
   brief: SearchBrief
 ): number {
@@ -43,14 +45,20 @@ export function calculateDeterministicScore(
           candidate.currentDesignation,
           candidate.searchSnippet,
           brief.mustHaveSkills,
-          brief.goodToHaveSkills
+          brief.goodToHaveSkills,
+          candidate.confirmedSkills ?? []
         )
       : null
   );
 
   apply(
     profile.experienceSeniority,
-    calculateExperienceScore(candidate.currentDesignation, brief.minExperience, brief.maxExperience)
+    calculateExperienceScore(
+      candidate.currentDesignation,
+      candidate.yearsExperience ?? null,
+      brief.minExperience,
+      brief.maxExperience
+    )
   );
 
   apply(
@@ -136,45 +144,72 @@ function calculateTitleScore(
   return 10;
 }
 
+/**
+ * A Google snippet is ~160 characters of name, headline and city; it almost
+ * never lists skills. Counting every unmentioned skill as a miss drove this
+ * score to near zero for nearly everyone -- on the heaviest weight in the
+ * Technology profile -- so ranking fell to whoever happened to have a keyword
+ * in their headline.
+ *
+ * `confirmedSkills` carries the skills proven present by the queries that
+ * returned this profile: Google matched them against the whole indexed page.
+ * Skills neither confirmed nor visible in the text are untested, and are left
+ * out of the denominator instead of counted as failures.
+ */
 function calculateSkillScore(
   currentTitle: string | null,
   snippet: string,
   mustHaveSkills: string[],
-  goodToHaveSkills: string[]
+  goodToHaveSkills: string[],
+  confirmedSkills: string[] = []
 ): number {
   const content = `${currentTitle || ''} ${snippet}`.toLowerCase();
+  const confirmed = new Set(confirmedSkills.map((s) => s.toLowerCase()));
 
-  let matchCount = 0;
-  let totalRequired = mustHaveSkills.length;
+  const has = (skill: string) => {
+    const s = skill.toLowerCase();
+    return confirmed.has(s) || content.includes(s);
+  };
 
-  for (const skill of mustHaveSkills) {
-    if (content.includes(skill.toLowerCase())) {
-      matchCount++;
-    }
-  }
+  const mustTested = mustHaveSkills.filter(has);
 
-  if (totalRequired === 0) return 50;
+  // Good-to-have skills are a bonus only; their absence is never evidence.
+  const goodMatches = goodToHaveSkills.filter(has).length;
+  const goodBonus =
+    goodToHaveSkills.length > 0 ? (goodMatches / goodToHaveSkills.length) * 20 : 0;
 
-  const mustHavePercentage = (matchCount / totalRequired) * 100;
+  if (mustHaveSkills.length === 0) return Math.min(100, 50 + goodBonus);
 
-  // Bonus for good-to-have skills
-  let goodToHaveMatches = 0;
-  for (const skill of goodToHaveSkills) {
-    if (content.includes(skill.toLowerCase())) {
-      goodToHaveMatches++;
-    }
-  }
+  // Only skills we had some way of checking belong in the denominator. When
+  // nothing was checkable the honest answer is neutral, not zero.
+  const checkable = mustHaveSkills.filter(
+    (skill) => confirmed.has(skill.toLowerCase()) || content.includes(skill.toLowerCase())
+  ).length;
+  if (checkable === 0) return Math.min(100, 50 + goodBonus);
 
-  const goodToHaveBonus = goodToHaveSkills.length > 0 ? (goodToHaveMatches / goodToHaveSkills.length) * 20 : 0;
-
-  return Math.min(100, mustHavePercentage + goodToHaveBonus);
+  const mustPercentage = (mustTested.length / checkable) * 100;
+  return Math.min(100, mustPercentage + goodBonus);
 }
-
+/**
+ * Prefers the stated tenure the parser recovered. Only when no number is
+ * available does it fall back to inferring seniority from title words --
+ * previously the number was extracted and then never passed in at all.
+ */
 function calculateExperienceScore(
   currentTitle: string | null,
+  yearsExperience: number | null,
   minExperience: number | null,
   maxExperience: number | null
 ): number {
+  if (yearsExperience != null && (minExperience != null || maxExperience != null)) {
+    const lo = minExperience ?? 0;
+    const hi = maxExperience ?? 45;
+    // Half a year of slack: profiles round their own tenure.
+    if (yearsExperience >= lo - 0.5 && yearsExperience <= hi + 0.5) return 100;
+    const drift = yearsExperience > hi ? yearsExperience - hi : lo - yearsExperience;
+    return drift <= 1.5 ? 55 : 20;
+  }
+
   if (!currentTitle) return 30;
 
   const titleLower = currentTitle.toLowerCase();
@@ -208,8 +243,12 @@ function calculateLocationScore(snippet: string, locations: string[]): number {
     }
   }
 
-  // Partial credit if location is mentioned but not exact match
-  if (locations[0] && snippet.includes(locations[0][0])) {
+  // Partial credit when the first word of a multi-word location appears
+  // ("Bengaluru" for "Bengaluru Urban"). The previous form indexed [0][0] --
+  // the first CHARACTER -- so "Bangalore" tested for the letter "B", which
+  // nearly every snippet contains, and handed 50 to candidates anywhere.
+  const firstWord = locations[0]?.trim().split(/\s+/)[0]?.toLowerCase();
+  if (firstWord && firstWord.length > 2 && snippetLower.includes(firstWord)) {
     return 50;
   }
 
@@ -243,16 +282,18 @@ function calculatePreferenceScore(
   preferredIndustries: string[],
   excludedIndustries: string[]
 ): number {
-  if (preferredIndustries.length === 0) return 50;
-
   const snippetLower = snippet.toLowerCase();
 
-  // Check excluded industries
+  // Exclusions are checked first and unconditionally. They used to sit behind
+  // an early return taken whenever no PREFERRED industry was set, so a brief
+  // that only said "not from X" had its one rule silently ignored.
   for (const industry of excludedIndustries) {
-    if (snippetLower.includes(industry.toLowerCase())) {
+    if (industry.trim() && snippetLower.includes(industry.toLowerCase())) {
       return 10;
     }
   }
+
+  if (preferredIndustries.length === 0) return 50;
 
   // Check preferred industries
   for (const industry of preferredIndustries) {
