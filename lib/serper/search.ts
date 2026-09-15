@@ -1,12 +1,63 @@
 import { SearchResult } from '@/types/index';
 import { SERPER_CONFIG } from '@/config/models';
 
+// Serper allows 5 requests per second. The pipeline fans out every query and
+// every page at once -- 18 queries x 2 pages is 36 simultaneous requests --
+// so roughly a third of a search was being rejected with 429 and silently
+// dropped. The parallelism is deliberate (sequential paging blew past the
+// serverless time limit), so the fix is to space the starts rather than to
+// serialise them.
+const MIN_INTERVAL_MS = 220; // ~4.5 req/s, comfortably under the limit
+const MAX_RETRIES = 3;
+
+let nextSlotAt = 0;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Reserves the next send slot. JavaScript is single-threaded, so claiming a
+ * slot and advancing the cursor cannot interleave -- every caller gets its own
+ * slot, spaced MIN_INTERVAL_MS apart, however many fire at once.
+ */
+async function waitForSlot(): Promise<void> {
+  const now = Date.now();
+  const sendAt = Math.max(now, nextSlotAt);
+  nextSlotAt = sendAt + MIN_INTERVAL_MS;
+  if (sendAt > now) await sleep(sendAt - now);
+}
+
+function isRateLimit(message: string): boolean {
+  return /rate limit|429|too many requests/i.test(message);
+}
+
 export async function serperSearch(query: string, page?: number): Promise<SearchResult[]> {
   if (!SERPER_CONFIG.apiKey) {
     throw new Error('SERPER_API_KEY not configured');
   }
 
-  try {
+  let lastError: Error | null = null;
+
+  // A 429 costs no credit, so retrying is free. Backing off and trying again
+  // recovers a page that would otherwise be lost from the candidate pool.
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    await waitForSlot();
+
+    try {
+      return await requestPage(query, page);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!isRateLimit(lastError.message) || attempt === MAX_RETRIES) break;
+      // 300ms, 600ms, 1200ms
+      await sleep(300 * 2 ** attempt);
+    }
+  }
+
+  console.error('Serper search failed:', lastError?.message);
+  throw lastError ?? new Error('Serper search failed');
+}
+
+async function requestPage(query: string, page?: number): Promise<SearchResult[]> {
+  {
     const response = await fetch('https://google.serper.dev/search', {
       method: 'POST',
       headers: {
@@ -37,9 +88,6 @@ export async function serperSearch(query: string, page?: number): Promise<Search
       subtitle: result.subtitle || '',
       position: result.position || 0,
     }));
-  } catch (error) {
-    console.error('Serper search failed:', error);
-    throw error;
   }
 }
 
