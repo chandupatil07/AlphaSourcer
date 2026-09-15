@@ -27,6 +27,20 @@ function locationClause(brief: SearchBrief): string {
   return list.length === 1 ? list[0] : `(${list.map((n) => `"${n}"`).join(' OR ')})`;
 }
 
+/**
+ * Skills are always wrapped in quotes, even single words. Unquoted, Google
+ * stems and substitutes them — "Django" can match "Jango", "Go" can match
+ * "Google" — which would make a returned profile weak evidence instead of
+ * proof. Quoted, a returned profile provably contains the exact term.
+ */
+function exactPhrase(value: string): string {
+  const clean = value.trim().replace(/"/g, '');
+  return clean ? `"${clean}"` : '';
+}
+
+/** Each probe costs Serper credits, so cap how many skills we verify. */
+const MAX_SKILL_PROBES = 4;
+
 function quoted(title: string): string {
   const clean = title.trim().replace(/"/g, '');
   return clean.includes(' ') ? `"${clean}"` : clean;
@@ -46,12 +60,13 @@ export function buildQueries(brief: SearchBrief): SearchQuery[] {
   const push = (
     query: string,
     family: SearchQuery['family'],
-    strategyReason: string
+    strategyReason: string,
+    requiresSkills?: string[]
   ) => {
     const normalized = query.replace(/\s+/g, ' ').trim();
     if (seen.has(normalized.toLowerCase())) return;
     seen.add(normalized.toLowerCase());
-    queries.push({ id: nanoid(), query: normalized, family, strategyReason });
+    queries.push({ id: nanoid(), query: normalized, family, strategyReason, requiresSkills });
   };
 
   const base = 'site:linkedin.com/in/';
@@ -156,14 +171,20 @@ export function buildQueries(brief: SearchBrief): SearchQuery[] {
     );
   }
 
-  // A couple of skill-qualified variants of the exact title, to reach profiles
-  // whose headline buries the title behind other text.
+  // One query per must-have skill, so every skill can be verified rather than
+  // only the first two. Google searches the whole indexed profile, so a
+  // profile returned here provably carries the skill — the snippet does not
+  // have to mention it. Skills are always quoted: unquoted single words get
+  // stemmed or dropped by Google, which would make the evidence unreliable.
   if (primary) {
-    for (const skill of brief.mustHaveSkills.slice(0, 2)) {
+    for (const skill of brief.mustHaveSkills.slice(0, MAX_SKILL_PROBES)) {
+      const term = exactPhrase(skill);
+      if (!term) continue;
       push(
-        `${base} ${quoted(primary)} ${where} ${quoted(skill)}`.trim(),
+        `${base} ${quoted(primary)} ${where} ${term}`.trim(),
         'skill_led',
-        `Title plus ${skill}`
+        `Title plus ${skill}`,
+        [skill]
       );
     }
   }
@@ -178,5 +199,13 @@ export function buildQueries(brief: SearchBrief): SearchQuery[] {
   const slots = isStudentSearch ? degrees.length + institutions.length : companies.length;
   // Hard ceiling: every query costs Serper credits, which are finite.
   const cap = Math.min(slots > 0 ? slots + 2 + titleQueryBudget : 10, 15);
-  return queries.slice(0, cap);
+
+  // Skill probes are what make skills verifiable at all, so they must not be
+  // pushed out by company or title queries competing for the same budget.
+  const kept = queries.slice(0, cap);
+  const keptIds = new Set(kept.map((q) => q.id));
+  const droppedProbes = queries.filter(
+    (q) => q.family === 'skill_led' && !keptIds.has(q.id)
+  );
+  return droppedProbes.length > 0 ? [...kept, ...droppedProbes] : kept;
 }

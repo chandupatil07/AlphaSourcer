@@ -135,6 +135,48 @@ export async function processSearchPipeline(
     // Stage 5: Deduplicate
     const allUnique = deduplicateCandidates(rawCandidates);
 
+    // Stage 5a: Confirm skills from search provenance.
+    //
+    // Google matches against the whole indexed profile, not the ~160 character
+    // snippet it chooses to display. So a profile returned by a query that
+    // demanded "Django" provably contains that term, whether or not the snippet
+    // shows it. Reading the query that found a candidate therefore recovers the
+    // one signal the snippet almost never carries — at no extra cost, from data
+    // the pipeline was already storing and discarding.
+    //
+    // The inverse does NOT hold. A probe returns one page of results, so a
+    // candidate missing from it may simply have ranked below the cut. Absence
+    // is recorded as untested, never as a missing skill.
+    const skillsByQuery = new Map<string, string[]>();
+    for (const q of queries) {
+      if (q.requiresSkills?.length) skillsByQuery.set(q.id, q.requiresSkills);
+    }
+    const probedSkills = new Set(
+      [...skillsByQuery.values()].flat().map((s) => s.toLowerCase())
+    );
+
+    for (const candidate of allUnique) {
+      const confirmed = new Set<string>();
+      for (const queryId of candidate.sourceQueries) {
+        for (const skill of skillsByQuery.get(queryId) ?? []) confirmed.add(skill);
+      }
+      candidate.confirmedSkills = [...confirmed];
+      // A skill nobody probed for cannot be judged either way.
+      candidate.untestedSkills = searchBrief.mustHaveSkills.filter(
+        (skill) =>
+          !probedSkills.has(skill.toLowerCase()) &&
+          !confirmed.has(skill)
+      );
+    }
+
+    const withConfirmedSkill = allUnique.filter((
+      c
+    ) => (c.confirmedSkills?.length ?? 0) > 0).length;
+    console.log(
+      `[skills] ${skillsByQuery.size} probe queries; ` +
+        `${withConfirmedSkill}/${allUnique.length} candidates have at least one skill confirmed`
+    );
+
     // Stage 5b: Relevance gate. Deterministic, so it costs nothing and applies
     // to every candidate rather than only the slice the LLM reviews.
     const relevant: Candidate[] = [];

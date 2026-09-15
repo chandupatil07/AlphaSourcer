@@ -32,6 +32,13 @@ export type SearchBrief = {
 export type SearchQuery = {
   id: string;
   query: string;
+  /**
+   * Skills this query demanded of the profile. Google matches against the
+   * whole indexed page, not the 160-character snippet it displays, so a
+   * profile returned by this query provably contains these terms. That
+   * makes provenance evidence, at no extra cost.
+   */
+  requiresSkills?: string[];
   family:
     | 'precision'
     | 'alternative_title'
@@ -56,6 +63,10 @@ export type Candidate = {
   sourceQueries: string[];
   queryFamilies: string[];
   extractionConfidence: number;
+  /** Skills proven present by the queries that returned this profile. */
+  confirmedSkills?: string[];
+  /** Must-have skills no query was able to test. Unknown, NOT absent. */
+  untestedSkills?: string[];
   deterministicScore: number;
   contextualScore: number;
   finalScore: number;
