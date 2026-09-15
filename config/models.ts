@@ -19,7 +19,8 @@ export type ModelSpec = {
 const DEFAULT_CHAIN: ModelSpec[] = [
   { id: 'openai/gpt-oss-120b', tokenMultiplier: 1 },
   { id: 'openai/gpt-oss-20b', tokenMultiplier: 1 },
-  { id: 'qwen/qwen3.6-27b', tokenMultiplier: 1.8 },
+  // { id: 'qwen/qwen3.6-27b', tokenMultiplier: 1.8 },  //original 
+    { id: 'qwen/qwen3.8-27b', tokenMultiplier: 1.8 },  //new changed for testing
 ];
 
 function parseChain(raw: string | undefined): ModelSpec[] | null {
