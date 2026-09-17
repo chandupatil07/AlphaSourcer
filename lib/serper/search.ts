@@ -57,11 +57,19 @@ export async function serperSearch(query: string, page?: number): Promise<Search
 }
 
 async function requestPage(query: string, page?: number): Promise<SearchResult[]> {
+  // Re-read the key here rather than relying on the caller's guard: narrowing
+  // does not cross a function boundary, so without this the header type is
+  // string | undefined and the build fails.
+  const apiKey = SERPER_CONFIG.apiKey;
+  if (!apiKey) {
+    throw new Error('SERPER_API_KEY not configured');
+  }
+
   {
     const response = await fetch('https://google.serper.dev/search', {
       method: 'POST',
       headers: {
-        'X-API-KEY': SERPER_CONFIG.apiKey,
+        'X-API-KEY': apiKey,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
