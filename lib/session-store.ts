@@ -5,6 +5,22 @@ import * as path from 'path';
 const SESSIONS_DIR = path.join(process.cwd(), '.sessions');
 const TTL_SECONDS = 24 * 60 * 60;
 
+/**
+ * A stored session that cannot be parsed is treated as missing rather than
+ * thrown. The API route answers a missing session with a clean 404 that the
+ * client handles; an exception here becomes a 500 and the client polls a
+ * dead session forever. The cause is still logged, so a corrupt write is
+ * visible in the server logs instead of being swallowed.
+ */
+function parseSession(raw: string, sessionId: string): SearchSession | null {
+  try {
+    return JSON.parse(raw) as SearchSession;
+  } catch (error) {
+    console.error(`Session ${sessionId} is stored but unreadable:`, error);
+    return null;
+  }
+}
+
 export interface SessionStore {
   set(sessionId: string, session: SearchSession): Promise<void>;
   get(sessionId: string): Promise<SearchSession | null>;
@@ -24,13 +40,19 @@ export class FileSessionStore implements SessionStore {
   async set(sessionId: string, session: SearchSession): Promise<void> {
     await this.ensureDir();
     const filePath = path.join(SESSIONS_DIR, `${sessionId}.json`);
-    await fs.writeFile(filePath, JSON.stringify(session), 'utf-8');
+    // Written to a temporary file and renamed, because the pipeline saves the
+    // session repeatedly while the client is polling it. A plain write is not
+    // atomic: a poll landing mid-write reads a truncated file, which used to
+    // surface as a 500 rather than as "still working".
+    const tempPath = `${filePath}.${Date.now()}.tmp`;
+    await fs.writeFile(tempPath, JSON.stringify(session), 'utf-8');
+    await fs.rename(tempPath, filePath);
   }
 
   async get(sessionId: string): Promise<SearchSession | null> {
     try {
       const filePath = path.join(SESSIONS_DIR, `${sessionId}.json`);
-      return JSON.parse(await fs.readFile(filePath, 'utf-8')) as SearchSession;
+      return parseSession(await fs.readFile(filePath, 'utf-8'), sessionId);
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
       throw error;
@@ -83,7 +105,7 @@ export class RedisSessionStore implements SessionStore {
   async get(sessionId: string): Promise<SearchSession | null> {
     const result = await this.command(['GET', `session:${sessionId}`]);
     if (typeof result !== 'string') return null;
-    return JSON.parse(result) as SearchSession;
+    return parseSession(result, sessionId);
   }
 
   async delete(sessionId: string): Promise<void> {
