@@ -1,4 +1,5 @@
 import { SearchResult } from '@/types/index';
+import { CITY_NAMES, COUNTRY_NAMES, INDIAN_REGIONS } from '@/lib/geo/places';
 
 export interface ParsedCandidate {
   name: string;
@@ -35,23 +36,54 @@ function looksLikeLocation(value: string): boolean {
   return /,/.test(value) || /(area|region|district|greater)/i.test(value);
 }
 
-// Countries and cities used to anchor a location inside snippet prose.
-const LOCATION_COUNTRIES = new Set([
-  'india', 'united states', 'usa', 'united kingdom', 'uk', 'canada', 'australia',
-  'singapore', 'germany', 'france', 'netherlands', 'ireland', 'japan', 'china',
-  'united arab emirates', 'uae',
+// Place names come from the shared dataset in lib/geo/places, so the parser
+// and the relevance gate agree on what counts as a city. They used to be two
+// separate hand-maintained lists, and a city in one but not the other produced
+// a profile whose location could be read but not matched, or the reverse.
+const LOCATION_COUNTRIES = new Set(COUNTRY_NAMES);
+const LOCATION_CITIES = new Set(CITY_NAMES);
+const LOCATION_REGIONS = new Set(INDIAN_REGIONS);
+
+/**
+ * City names that are also ordinary English words or famous universities.
+ * They stay available inside a comma run, where "Reading, England" is
+ * unambiguous, but are kept out of the bare mid-sentence scan, where
+ * "reading logs" or "Cambridge" in a degree line would otherwise be read as
+ * the candidate's home city.
+ */
+const AMBIGUOUS_BARE_CITIES = new Set([
+  'reading', 'cambridge', 'oxford', 'phoenix', 'columbus', 'salem', 'richmond',
+  'durham', 'charleston', 'huntington', 'manhattan', 'waterloo', 'kota',
+  'mobile', 'goa', 'berkeley', 'irving', 'arlington', 'washington dc',
 ]);
 
-const LOCATION_CITIES = new Set([
-  'bengaluru', 'bangalore', 'mumbai', 'bombay', 'delhi', 'new delhi', 'noida',
-  'gurgaon', 'gurugram', 'hyderabad', 'chennai', 'pune', 'kolkata', 'ahmedabad',
-  'jaipur', 'kochi', 'indore', 'coimbatore', 'chandigarh', 'nagpur', 'bhubaneswar',
-  'thiruvananthapuram', 'mysuru', 'mysore', 'vadodara', 'surat', 'lucknow',
-  'london', 'singapore', 'dubai', 'san francisco', 'seattle', 'new york',
-  'toronto', 'berlin', 'sydney',
-]);
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * One precompiled alternation for the bare-city scan.
+ *
+ * Building a RegExp per city per snippet would be several hundred
+ * constructions for every candidate; across a few hundred candidates a search
+ * that should be network-bound starts spending real time compiling regexes.
+ * Longest names first, so "new delhi" wins over "delhi" and "san jose" over
+ * a shorter prefix.
+ */
+const BARE_CITY_PATTERN = new RegExp(
+  '(^|[\\s(,])(' +
+    CITY_NAMES.filter((city) => !AMBIGUOUS_BARE_CITIES.has(city))
+      .slice()
+      .sort((a, b) => b.length - a.length)
+      .map(escapeRegExp)
+      .join('|') +
+    ')([\\s.,)]|$)',
+  'i'
+);
 
 const trimTail = (value: string) => value.replace(/[.\s]+$/, '').trim();
+
+const titleCase = (value: string) => value.replace(/\b\w/g, (c) => c.toUpperCase());
 
 /**
  * Recovers a location from snippet prose.
@@ -67,33 +99,39 @@ function locationFromSnippet(snippet: string): string | null {
   const text = clean(snippet);
   if (!text) return null;
 
-  // "... Location: Bengaluru ..."
+  // "... Location: Bengaluru ..." — an explicit label beats any inference.
   const labelled = text.match(/Location:\s*([^·•|]+)/i);
   if (labelled) {
     const value = trimTail(clean(labelled[1]));
     if (value && value.length <= 60) return value;
   }
 
-  // Comma runs anchored on a country or a city. Google truncates snippets
-  // ("Bengaluru, Karnataka, Ind..."), so a city anchor is needed too.
-  for (const part of text.split(/[·•|]/)) {
+  // An "Education:" run names the institution's city, not the candidate's.
+  // "Education: Indian Institute of Technology, Roorkee" would otherwise put
+  // a Bangalore engineer in Roorkee. Drop it before looking for a place.
+  const body = text.replace(/Education:\s*[^·•|]*/gi, ' ');
+
+  // Comma runs anchored on a country, a state or a city. Google truncates
+  // snippets ("Bengaluru, Karnataka, Ind..."), so a city anchor is needed too.
+  for (const part of body.split(/[·•|]/)) {
     const segments = part.split(',').map((seg) => trimTail(clean(seg))).filter(Boolean);
     for (let i = segments.length - 1; i >= 0; i--) {
       const seg = segments[i].toLowerCase();
       const isCountry = LOCATION_COUNTRIES.has(seg);
-      if (!isCountry && !LOCATION_CITIES.has(seg)) continue;
-      const from = isCountry ? Math.max(0, i - 2) : i;
+      const isRegion = LOCATION_REGIONS.has(seg);
+      if (!isCountry && !isRegion && !LOCATION_CITIES.has(seg)) continue;
+
+      // Reach back far enough to carry the city with its anchor:
+      // "Bengaluru, Karnataka, India" anchors on the country two segments on.
+      const from = isCountry ? Math.max(0, i - 2) : isRegion ? Math.max(0, i - 1) : i;
       const value = segments.slice(from, i + 1).join(', ');
       if (value.length <= 60) return value;
     }
   }
 
   // Last resort: a bare city mid-sentence ("... based in Bengaluru.").
-  for (const city of LOCATION_CITIES) {
-    if (new RegExp(`(^|[\\s(])${city}([\\s.,)]|$)`, 'i').test(text)) {
-      return city.replace(/\b\w/g, (c) => c.toUpperCase());
-    }
-  }
+  const bare = body.match(BARE_CITY_PATTERN);
+  if (bare) return titleCase(bare[2].toLowerCase());
 
   return null;
 }
