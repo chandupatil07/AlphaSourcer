@@ -1,5 +1,6 @@
 import { Candidate, SearchBrief } from '@/types/index';
 import { SCORING_PROFILES } from '@/config/scoring';
+import { CITY_ALIASES, countryOfPlace } from '@/lib/geo/places';
 
 export function calculateDeterministicScore(
   candidate: {
@@ -64,7 +65,12 @@ export function calculateDeterministicScore(
   apply(
     profile.location,
     brief.locations.length > 0
-      ? calculateLocationScore(`${candidate.location || ''} ${candidate.searchSnippet}`, brief.locations)
+      ? calculateLocationScore(
+          candidate.location ?? null,
+          candidate.searchSnippet,
+          brief.locations,
+          brief.locationVariants ?? []
+        )
       : null
   );
 
@@ -232,27 +238,81 @@ function calculateExperienceScore(
   return 50;
 }
 
-function calculateLocationScore(snippet: string, locations: string[]): number {
+/**
+ * Scores location by how strongly it is evidenced, not by whether a city name
+ * appears somewhere in the text.
+ *
+ * The previous form concatenated the extracted location and the raw snippet
+ * and substring-matched the result, so three very different candidates all
+ * scored a perfect 100: one whose profile states Bengaluru, one whose snippet
+ * merely mentions a Bangalore client, and a recruiter whose post reads
+ * "Hiring Backend Developer - Bangalore (hybrid)". The extracted location --
+ * the one field we take care to parse and validate -- carried no more weight
+ * than a stray word.
+ *
+ * Tiers, strongest first:
+ *   100  the profile's own location matches the brief
+ *    45  the profile's location is in the right country, wrong city
+ *    10  the profile's location is somewhere else entirely
+ *    70  no location on the profile, but the text names the place
+ *    35  no location, no mention -- unknown, which is not "elsewhere"
+ */
+function calculateLocationScore(
+  candidateLocation: string | null,
+  snippet: string,
+  locations: string[],
+  locationVariants: string[]
+): number {
   if (locations.length === 0) return 50;
 
-  const snippetLower = snippet.toLowerCase();
+  const norm = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ');
+  const escapeRe = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Whole-word, so "in" cannot match inside "Virginia" and a two-letter code
+  // cannot match inside an ordinary word.
+  const namesTerm = (haystack: string, term: string) =>
+    term.length > 1 &&
+    new RegExp(`(^|[^a-z0-9])${escapeRe(term)}([^a-z0-9]|$)`, 'i').test(haystack);
 
-  for (const location of locations) {
-    if (snippetLower.includes(location.toLowerCase())) {
-      return 100;
+  const accepted = new Set<string>();
+  const targetCountries = new Set<string>();
+
+  for (const raw of [...locations, ...locationVariants]) {
+    if (!raw) continue;
+    for (const piece of [raw, ...raw.split(',')]) {
+      const key = norm(piece);
+      if (!key) continue;
+      accepted.add(key);
+      for (const alias of CITY_ALIASES[key] ?? []) accepted.add(norm(alias));
+      const country = countryOfPlace(key);
+      if (country) targetCountries.add(country);
     }
   }
 
-  // Partial credit when the first word of a multi-word location appears
-  // ("Bengaluru" for "Bengaluru Urban"). The previous form indexed [0][0] --
-  // the first CHARACTER -- so "Bangalore" tested for the letter "B", which
-  // nearly every snippet contains, and handed 50 to candidates anywhere.
-  const firstWord = locations[0]?.trim().split(/\s+/)[0]?.toLowerCase();
-  if (firstWord && firstWord.length > 2 && snippetLower.includes(firstWord)) {
-    return 50;
+  if (candidateLocation) {
+    const loc = norm(candidateLocation);
+    for (const term of accepted) {
+      if (namesTerm(loc, term)) return 100;
+    }
+
+    // Right country, different city: a real signal, but not what was asked.
+    for (const part of candidateLocation.split(',')) {
+      const country = countryOfPlace(part);
+      if (country && targetCountries.has(country)) return 45;
+    }
+
+    // A location we could read that matches nothing the brief accepts.
+    return 10;
   }
 
-  return 20;
+  // No location on the profile. The place name may still appear in the text,
+  // but it also appears in job adverts and in descriptions of past work, so
+  // it cannot earn the same score as a stated location.
+  for (const term of accepted) {
+    if (namesTerm(snippet, term)) return 70;
+  }
+
+  // Unknown. Deliberately above "confirmed elsewhere": we did not observe it.
+  return 35;
 }
 
 function calculateCompanyScore(
