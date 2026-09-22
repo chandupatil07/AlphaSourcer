@@ -1,4 +1,5 @@
 import { SearchBrief } from '@/types/index';
+import { detectJobAdvert } from '@/lib/candidates/jobAdvert';
 
 export type RelevanceTier = 'core' | 'adjacent' | 'skill' | 'excluded';
 
@@ -477,6 +478,23 @@ export function assessRelevance(
       tier: 'excluded',
       tierLabel: 'Removed',
       reason: 'No job title found in the profile',
+      keep: false,
+    };
+  }
+
+  // A recruiter who writes their vacancy into their own headline produces a
+  // page that looks like a person whose job title IS the role being hired
+  // for -- so it matches the title requirement perfectly and can rank near
+  // the top. Excluded with the phrase that gave it away, so the call stays
+  // reviewable rather than silent.
+  const advert = detectJobAdvert(designation, candidate.searchSnippet);
+  if (advert.isAdvert) {
+    return {
+      tier: 'excluded',
+      tierLabel: 'Removed',
+      reason: `Reads as a job advert, not a candidate profile (${advert.matched
+        .slice(0, 2)
+        .join(', ')})`,
       keep: false,
     };
   }
