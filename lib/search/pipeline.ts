@@ -334,9 +334,16 @@ export async function processSearchPipeline(
   }
 }
 
+/**
+ * Reads the bands from config/scoring rather than repeating the numbers.
+ * MATCH_STRENGTH_RANGES was already imported here and never used while this
+ * function hard-coded 90/75/60, so the config could be edited with no effect
+ * on behaviour -- and the export sheet, which labels the same bands, would
+ * then disagree with both.
+ */
 function getMatchStrengthFromScore(score: number): 'excellent' | 'strong' | 'potential' | 'low' {
-  if (score >= 90) return 'excellent';
-  if (score >= 75) return 'strong';
-  if (score >= 60) return 'potential';
+  if (score >= MATCH_STRENGTH_RANGES.excellent.min) return 'excellent';
+  if (score >= MATCH_STRENGTH_RANGES.strong.min) return 'strong';
+  if (score >= MATCH_STRENGTH_RANGES.potential.min) return 'potential';
   return 'low';
 }

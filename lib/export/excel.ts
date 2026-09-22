@@ -1,5 +1,6 @@
 import { Candidate } from '@/types/index';
 import * as ExcelJS from 'exceljs';
+import { MATCH_STRENGTH_RANGES } from '@/config/scoring';
 
 const NAVY = 'FF0B1F3A';
 const TEAL = 'FF00B4A6';
@@ -20,6 +21,14 @@ const REMOVED_COLUMNS: Column[] = [
   ...SHORTLIST_COLUMNS.slice(0, 4),
   { header: 'Why removed', key: 'why', width: 52 },
 ];
+
+type MatchBand = keyof typeof MATCH_STRENGTH_RANGES;
+
+function bandLabel(band: MatchBand): string {
+  const range = MATCH_STRENGTH_RANGES[band];
+  const name = band.charAt(0).toUpperCase() + band.slice(1);
+  return `${name} (${range.min}-${range.max})`;
+}
 
 function styleHeader(sheet: ExcelJS.Worksheet, columnCount: number): void {
   const header = sheet.getRow(1);
@@ -110,10 +119,12 @@ export async function generateExcelFile(
     { metric: 'Adjacent matches', value: countTier('adjacent') },
     { metric: 'Skill-based matches', value: countTier('skill') },
     { metric: '', value: '' },
-    { metric: 'Excellent (90+)', value: countStrength('excellent') },
-    { metric: 'Strong (75-89)', value: countStrength('strong') },
-    { metric: 'Potential (60-74)', value: countStrength('potential') },
-    { metric: 'Low (<60)', value: countStrength('low') },
+    // Labelled from the same config the scorer bands against, so the sheet
+    // cannot quietly state a range the product no longer uses.
+    { metric: bandLabel('excellent'), value: countStrength('excellent') },
+    { metric: bandLabel('strong'), value: countStrength('strong') },
+    { metric: bandLabel('potential'), value: countStrength('potential') },
+    { metric: bandLabel('low'), value: countStrength('low') },
   ]);
 
   styleHeader(summary, 2);
