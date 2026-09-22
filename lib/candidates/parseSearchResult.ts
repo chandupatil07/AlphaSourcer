@@ -1,5 +1,5 @@
 import { SearchResult } from '@/types/index';
-import { CITY_NAMES, COUNTRY_NAMES, INDIAN_REGIONS } from '@/lib/geo/places';
+import { CITY_NAMES, COUNTRY_NAMES, INDIAN_REGIONS, countryOfPlace } from '@/lib/geo/places';
 
 export interface ParsedCandidate {
   name: string;
@@ -137,26 +137,85 @@ function locationFromSnippet(snippet: string): string | null {
 }
 
 /**
- * Google renders some LinkedIn results as "Experience: Acme · Education: X ·
- * Location: Y", and others mention the employer only in prose. Reading those
- * recovers an employer for roughly half the results that carry no subtitle.
+ * Recovers the current employer from the result text.
+ *
+ * Employer carries 30% of the relevance weight, and on a recorded live
+ * session only 12% of candidates had one -- so most of that weight was being
+ * decided by an absence. LinkedIn headlines almost always name the employer;
+ * they just rarely use the one shape the parser knew.
+ *
+ * Two mistakes are specifically avoided:
+ *   - "Ex-Amazon", "formerly at X" name a PAST employer. Reading them as
+ *     current would place the candidate at a company they have left.
+ *   - "based at Bangalore" is a place, not a company. Anything that resolves
+ *     to a known city or country is rejected.
  */
+
+/** Words that mean the following name is not where the candidate works now. */
+const NOT_CURRENT_EMPLOYER = /^(?:ex|former|formerly|previously|prev|the|a|an|my|our|we)\b/i;
+
+/** Generic page furniture that is never a company name. */
+const NOT_A_COMPANY = new Set([
+  'linkedin', 'linkedln', 'india', 'experience', 'education', 'location',
+  'present', 'company', 'university', 'college', 'institute', 'school',
+]);
+
+function cleanEmployer(raw: string | undefined): string | null {
+  if (!raw) return null;
+  let value = clean(raw)
+    // Stop at the first separator: a headline continues past the employer.
+    .split(/[|·•]/)[0]
+    // Google's own section labels can be swept into the capture, turning
+    // "Experience InMobi 5 years" into the employer "Experience InMobi".
+    .replace(/^(?:experience|education|location|about|skills)\s+/i, '')
+    .replace(/[,.;:\-\s]+$/, '')
+    .trim();
+
+  if (!value || value.length > 60) return null;
+  if (NOT_CURRENT_EMPLOYER.test(value)) return null;
+  if (NOT_A_COMPANY.has(value.toLowerCase())) return null;
+  // "at Bangalore" is a place, not an employer.
+  if (countryOfPlace(value)) return null;
+
+  return value;
+}
+
 function employerFromSnippet(snippet: string): string | null {
   const text = clean(snippet);
   if (!text) return null;
 
+  // "Experience: Acme · Education: ..." — Google's own structured rendering.
   const labelled = text.match(/Experience:\s*([^·•|]+)/i);
   if (labelled) {
-    const value = clean(labelled[1]).replace(/\s+\d+\s+years?.*$/i, '');
-    if (value && value.length < 60) return value;
+    const value = cleanEmployer(clean(labelled[1]).replace(/\s+\d+\s+years?.*$/i, ''));
+    if (value) return value;
+  }
+
+  // "Senior Backend Engineer @ Amazon AWS" and "@Freshworks". The lookbehind
+  // keeps "Ex-@Flipkart" style past employers out.
+  const atSign = text.match(/(?<!ex[\s-])@\s*([A-Za-z][\w&.'\-]*(?:\s+[A-Z][\w&.'\-]*){0,3})/);
+  if (atSign) {
+    const value = cleanEmployer(atSign[1]);
+    if (value) return value;
+  }
+
+  // "Backend Developer at Swiggy", "Senior Backend Engineer at Uber".
+  // A role word before "at" keeps ordinary prose ("working at scale") out,
+  // and the capitalised capture keeps places and verbs out.
+  const roleAt = text.match(
+    /\b(?:engineer|developer|manager|analyst|specialist|executive|lead|architect|consultant|designer|scientist|associate|officer|intern)\s+at\s+([A-Z][\w&.'\-]*(?:\s+[A-Z][\w&.'\-]*){0,3})/i
+  );
+  if (roleAt) {
+    const value = cleanEmployer(roleAt[1]);
+    if (value) return value;
   }
 
   // "… · 2 years 2 months · Background Verification Specialist" style entries
   // put the company immediately before a tenure run.
   const beforeTenure = text.match(/([A-Z][\w&.,'\-]*(?:\s+[A-Z][\w&.,'\-]*){0,3})\.?\s+\d+\s+years?\s+\d*\s*months?/);
   if (beforeTenure) {
-    const value = clean(beforeTenure[1]);
-    if (value && value.length < 60) return value;
+    const value = cleanEmployer(beforeTenure[1]);
+    if (value) return value;
   }
 
   return null;
