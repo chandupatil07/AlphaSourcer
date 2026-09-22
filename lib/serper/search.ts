@@ -1,5 +1,6 @@
 import { SearchResult } from '@/types/index';
 import { SERPER_CONFIG } from '@/config/models';
+import { SerperGeo, geoParams } from '@/lib/serper/geo';
 
 // Serper allows 5 requests per second. The pipeline fans out every query and
 // every page at once -- 18 queries x 2 pages is 36 simultaneous requests --
@@ -30,7 +31,11 @@ function isRateLimit(message: string): boolean {
   return /rate limit|429|too many requests/i.test(message);
 }
 
-export async function serperSearch(query: string, page?: number): Promise<SearchResult[]> {
+export async function serperSearch(
+  query: string,
+  page?: number,
+  geo?: SerperGeo
+): Promise<SearchResult[]> {
   if (!SERPER_CONFIG.apiKey) {
     throw new Error('SERPER_API_KEY not configured');
   }
@@ -43,7 +48,7 @@ export async function serperSearch(query: string, page?: number): Promise<Search
     await waitForSlot();
 
     try {
-      return await requestPage(query, page);
+      return await requestPage(query, page, geo);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (!isRateLimit(lastError.message) || attempt === MAX_RETRIES) break;
@@ -56,7 +61,11 @@ export async function serperSearch(query: string, page?: number): Promise<Search
   throw lastError ?? new Error('Serper search failed');
 }
 
-async function requestPage(query: string, page?: number): Promise<SearchResult[]> {
+async function requestPage(
+  query: string,
+  page?: number,
+  geo?: SerperGeo
+): Promise<SearchResult[]> {
   // Re-read the key here rather than relying on the caller's guard: narrowing
   // does not cross a function boundary, so without this the header type is
   // string | undefined and the build fails.
@@ -77,6 +86,11 @@ async function requestPage(query: string, page?: number): Promise<SearchResult[]
         // Free Serper accounts reject num > 10; depth comes from paging instead.
         num: 10,
         type: 'search',
+        // Bias retrieval toward the country the brief asked for. Without this
+        // every search is a worldwide Google search and foreign profiles have
+        // to be filtered out afterwards -- which only works for the ones
+        // whose location can actually be read.
+        ...geoParams(geo),
         ...(page && page > 1 ? { page } : {}),
       }),
     });
@@ -105,13 +119,14 @@ async function requestPage(query: string, page?: number): Promise<SearchResult[]
  */
 export async function serperSearchPaged(
   query: string,
-  pages: number
+  pages: number,
+  geo?: SerperGeo
 ): Promise<SearchResult[]> {
   // Pages are fetched concurrently rather than in sequence. Sequential paging
   // made depth cost wall-clock time, which is the scarce resource on a
   // serverless function; in parallel, more pages cost only Serper credits.
   const requests = Array.from({ length: pages }, (_, i) =>
-    serperSearch(query, i + 1)
+    serperSearch(query, i + 1, geo)
   );
 
   const settled = await Promise.allSettled(requests);

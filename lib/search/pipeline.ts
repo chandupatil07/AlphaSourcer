@@ -2,6 +2,7 @@ import { SearchSession, Candidate, SearchBrief } from '@/types/index';
 import { parseRequirement } from '@/lib/groq/parseRequirement';
 import { buildQueries } from '@/lib/search/buildQueries';
 import { serperSearchPaged, isLinkedInProfileUrl } from '@/lib/serper/search';
+import { geoFromBrief } from '@/lib/serper/geo';
 import { parseSearchResult } from '@/lib/candidates/parseSearchResult';
 import { evaluateCandidatesBatch, EvaluationInput } from '@/lib/groq/evaluateCandidate';
 import { calculateDeterministicScore } from '@/lib/scoring/deterministic';
@@ -58,9 +59,13 @@ export async function processSearchPipeline(
     // Roughly 40 credits per search, whatever mix of queries the brief produces.
     const pagesPerQuery =
       queries.length > 12 ? 2 : queries.length > 8 ? 3 : LIMITS.resultPagesPerQuery;
+    // Country bias for retrieval. Empty when the brief names no location or
+    // spans several countries, which keeps the previous worldwide behaviour.
+    const geo = geoFromBrief(searchBrief);
     console.log(
       `[search] ${queries.length} queries x ${pagesPerQuery} pages = ~${queries.length * pagesPerQuery} credits`
     );
+    console.log(`[geo] ${geo.gl ? `gl=${geo.gl}` : 'no country bias (worldwide)'}`);
 
     // Stage 3: Search with Serper
     // Queries run concurrently — 8 sequential paged fetches dominated total
@@ -70,7 +75,7 @@ export async function processSearchPipeline(
         query,
         // Each page is a Serper credit, so depth is traded against breadth:
         // a few broad queries earn deep paging, many narrow ones do not.
-        results: await serperSearchPaged(query.query, pagesPerQuery),
+        results: await serperSearchPaged(query.query, pagesPerQuery, geo),
       }))
     );
 
