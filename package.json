@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run build",
+    "eval": "npx tsx eval/replay.ts b.json"
   },
   "dependencies": {
     "@types/node": "^20.10.0",

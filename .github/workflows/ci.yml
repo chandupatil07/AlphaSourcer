@@ -1,0 +1,46 @@
+name: CI
+
+# A commit that does not compile once reached a deployment because nothing
+# checked it: `next dev` type-checks loosely while `next build` is strict, so
+# code can run locally for hours and still fail the moment it is deployed.
+# This runs the strict checks on every push and every pull request.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Production build
+        # The build needs the env vars to exist, not to be valid: nothing calls
+        # Serper or Groq at build time. Placeholders keep the config module from
+        # throwing while keeping real keys out of CI.
+        env:
+          SERPER_API_KEY: ci-placeholder
+          GROQ_API_KEY: ci-placeholder
+        run: npm run build
+
+      - name: Scoring harness on recorded sessions
+        # Replays candidates the app itself recorded through the current
+        # scoring code. No network, no Serper credits, no Groq tokens -- so a
+        # change that breaks scoring fails here rather than in front of a user.
+        run: npx tsx eval/replay.ts b.json
