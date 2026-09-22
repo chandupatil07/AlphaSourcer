@@ -44,3 +44,10 @@ jobs:
         # scoring code. No network, no Serper credits, no Groq tokens -- so a
         # change that breaks scoring fails here rather than in front of a user.
         run: npx tsx eval/replay.ts b.json
+
+      - name: Baseline comparison
+        # Runs the scoring code as it stands on master (eval/_baseline, taken
+        # from git, not retyped) beside the current code on the same recorded
+        # candidates. A change that silently alters who is kept shows up as a
+        # different number here.
+        run: npx tsx eval/prove.ts eval/fixtures/run1-before-fixes.json
