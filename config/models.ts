@@ -19,8 +19,16 @@ export type ModelSpec = {
 const DEFAULT_CHAIN: ModelSpec[] = [
   { id: 'openai/gpt-oss-120b', tokenMultiplier: 1 },
   { id: 'openai/gpt-oss-20b', tokenMultiplier: 1 },
-  // { id: 'qwen/qwen3.6-27b', tokenMultiplier: 1.8 },  //original 
-    { id: 'qwen/qwen3.8-27b', tokenMultiplier: 1.8 },  //new changed for testing
+  // Was qwen/qwen3.6-27b. That model is documented by Groq, but calling it
+  // with the keys used here returns "model not found -- may not be available
+  // or may require special access", so the last line of defence would have
+  // failed exactly when the first two models are rate-limited, which on the
+  // free tier is precisely when it is needed.
+  //
+  // If an account DOES have access to 3.6, set GROQ_MODEL_CHAIN in the
+  // environment rather than editing this list -- the chain is meant to be
+  // configurable per deployment.
+  { id: 'qwen/qwen3.8-27b', tokenMultiplier: 1.8 },
 ];
 
 function parseChain(raw: string | undefined): ModelSpec[] | null {
