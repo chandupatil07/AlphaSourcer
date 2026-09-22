@@ -8,7 +8,7 @@ that justified it. If a change has no number next to it, it should not be here.
 
 ```bash
 npm run check                                    # tsc --noEmit + next build
-npx tsx eval/prove.ts .sessions/02nonofr5.json   # owner's code vs this branch, side by side
+npx tsx eval/prove.ts eval/fixtures/run1-before-fixes.json   # owner's code vs this branch, side by side
 npx tsx eval/replay.ts b.json                    # re-score a recorded session
 npx tsx eval/compare.ts <before.json> <after.json>
 ```
@@ -246,7 +246,7 @@ session recorded in the repo. `npm run check` does the first two locally.
 | `npx tsc --noEmit` | ✅ clean |
 | `npm run build` (production, clean install) | ✅ all routes compiled |
 | `npx tsx eval/replay.ts b.json` | ✅ runs |
-| `npx tsx eval/prove.ts .sessions/02nonofr5.json` | ✅ runs |
+| `npx tsx eval/prove.ts eval/fixtures/run1-before-fixes.json` | ✅ runs |
 | UI files touched | **none** — `components/` and `app/` unchanged |
 | Owner's `master` | **untouched** |
 
@@ -295,3 +295,114 @@ API first.
 | Location unknown for ~56% of candidates | They are kept, deliberately. Whether to show, rank down, or hide them is the owner's call |
 | Nothing measures whether the **right** people rank at the top | Needs 30–50 candidates from one brief labelled good/bad by a human. Everything proven so far is recall and location precision |
 | No SERP caching | Re-scoring a search costs credits, which is what makes accuracy experiments expensive |
+
+---
+
+## Session 2, part 2 — the un-audited files
+
+The first pass covered retrieval, parsing and scoring. These are the files
+that had not been read yet: de-duplication, the session store, the exporter
+and the model config.
+
+### 8. Duplicate profiles kept the first snippet, not the best one
+
+| | |
+|---|---|
+| **File** | `lib/candidates/deduplicate.ts` · **Commit** `e234d7a` |
+
+The same person appears once per query that found them — 358 raw results
+carried 306 distinct profiles — and Google picks a different preview for each
+query, so one appearance may state the city while another states the
+employer. The merge kept whichever snippet arrived first and discarded the
+rest, although skills, location and experience are all read back out of that
+text downstream.
+
+Now keeps the longest snippet and the highest extraction confidence.
+
+**Also deleted a dead `nameOrgMap`** that was built, never read, and
+described by a comment as "secondary deduplication by name + organization".
+Measuring it showed it should stay deleted: across 644 recorded candidates it
+would have merged exactly **one** pair — two different people both named
+Abhishek Kumar with no employer extracted. Merging distinct people is worse
+than listing one twice.
+
+### 9. An unreadable session returned 500 instead of 404
+
+| | |
+|---|---|
+| **File** | `lib/session-store.ts` · **Commit** `f70d2c2` |
+
+Both stores called `JSON.parse` on the stored value with no guard. The client
+polls that route every couple of seconds and handles a 404 cleanly; a 500
+leaves it polling a dead session indefinitely. Unreadable sessions are now
+treated as missing, and the cause is logged rather than swallowed.
+
+The file store also wrote non-atomically while the pipeline saves the session
+repeatedly during a search, so a poll landing mid-write read a half-written
+file. It now writes to a temp file and renames.
+
+**Measured while here:** a 306-candidate session serialises to **293 KB**.
+Upstash rejects requests over 1 MB, so there is roughly 3× headroom — worth
+knowing before anyone raises the page count.
+
+### 10. The score bands were defined in three places
+
+| | |
+|---|---|
+| **Files** | `lib/search/pipeline.ts`, `lib/export/excel.ts` · **Commit** `509a4e3` |
+
+90 / 75 / 60 lived in `MATCH_STRENGTH_RANGES`, again as hard-coded numbers in
+`getMatchStrengthFromScore`, and again as hard-coded label text in the Excel
+summary. `MATCH_STRENGTH_RANGES` was **imported into `pipeline.ts` and never
+used** — so editing the config changed nothing, and the export sheet would
+have gone on stating a range the product no longer used.
+
+Behaviour is unchanged today. The point is that it stays unchanged tomorrow.
+
+**Verified** by generating the workbook from a recorded session: 208
+shortlisted and 98 removed rows across three sheets, summary reading
+"Excellent (90-100)", "Potential (60-74)", "Low (0-59)".
+
+### 11. The evidence was on one laptop and nowhere else
+
+| | |
+|---|---|
+| **Files** | `eval/fixtures/` · **Commits** `f8ab119`, `847ec2f` |
+
+Every before/after number in these documents came from two live sessions in
+`.sessions/` — which is **git-ignored**, correctly, because it is the local
+development session store.
+
+So the "run it yourself and check" instructions in the reports **could not
+actually be followed by anyone else**. The two sessions are now tracked as
+fixtures with a README covering provenance, and CI runs the baseline
+comparison against them on every push.
+
+### 12. Model chain tidied
+
+| | |
+|---|---|
+| **File** | `config/models.ts` · **Commit** `cd86558` |
+
+Replaced a commented-out model and a "changed for testing" note with the
+actual finding, and recorded that an account *with* access to `qwen3.6-27b`
+should set `GROQ_MODEL_CHAIN` rather than edit the list — the chain is
+already configurable per deployment.
+
+---
+
+## Final verification
+
+Run from a clean `git archive` of the committed tree with a fresh `npm ci`,
+so it verifies exactly what a deployment builds — not a working directory
+with stale artifacts in it.
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ clean |
+| `npm run build` | ✅ all routes compiled |
+| `npx tsx eval/replay.ts b.json` | ✅ |
+| `npx tsx eval/prove.ts eval/fixtures/run1-before-fixes.json` | ✅ |
+| Excel export generated from a real session | ✅ 3 sheets, 306 rows |
+| UI files touched | **none** |
+| Owner's `master` | **untouched** |
