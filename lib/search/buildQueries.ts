@@ -145,9 +145,17 @@ export function buildQueries(brief: SearchBrief): SearchQuery[] {
     );
   }
 
+  // The location clause belongs here too. Without it these queries searched
+  // for, say, Amazon backend engineers ANYWHERE -- Seattle, Dublin, Toronto --
+  // and on a live Bangalore brief they were 10 of the 18 queries, so most of
+  // the pool was retrieved with no location constraint at all. Filtering
+  // afterwards cannot recover from that: a foreign profile whose city the
+  // parser cannot read is kept, because unknown is not treated as elsewhere.
+  // `where` is an empty string when the brief names no location, so a
+  // location-free brief behaves exactly as before.
   for (const company of isStudentSearch ? [] : companies) {
     push(
-      `${base} ${quoted(company)} ${titleAlternation}`.trim(),
+      `${base} ${quoted(company)} ${titleAlternation} ${where}`.trim(),
       'company_led',
       `Target employer: ${company}`
     );
