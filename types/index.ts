@@ -67,6 +67,12 @@ export type Candidate = {
   confirmedSkills?: string[];
   /** Must-have skills no query was able to test. Unknown, NOT absent. */
   untestedSkills?: string[];
+  /**
+   * Skills a probe aimed at THIS profile searched for and did not find.
+   * Unlike an empty snippet this is real negative evidence: the query named
+   * the profile and the term, and Google returned nothing.
+   */
+  absentSkills?: string[];
   deterministicScore: number;
   contextualScore: number;
   finalScore: number;
@@ -101,6 +107,15 @@ export type SearchSession = {
   error?: string;
   warning?: string;
   tokensUsed?: number;
+  /** What the per-candidate skill probes cost and settled, for the results page. */
+  skillVerification?: {
+    probes: number;
+    confirmed: number;
+    absent: number;
+    failed: number;
+    candidatesProbed: number;
+    skipped: 'disabled' | 'no-skills' | 'out-of-time' | null;
+  };
   createdAt: string;
 };
 

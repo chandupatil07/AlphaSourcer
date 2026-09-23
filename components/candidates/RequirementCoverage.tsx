@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Candidate, SearchBrief } from '@/types/index';
+import { Candidate, SearchBrief, SearchSession } from '@/types/index';
 import { buildBriefCoverage, CoverageRow } from '@/lib/candidates/briefCoverage';
 
 /**
@@ -47,9 +47,11 @@ function Bar({ row }: { row: CoverageRow }) {
 export default function RequirementCoverage({
   candidates,
   brief,
+  verification,
 }: {
   candidates: Candidate[];
   brief: SearchBrief | null;
+  verification?: SearchSession['skillVerification'];
 }) {
   const coverage = useMemo(() => buildBriefCoverage(candidates, brief), [candidates, brief]);
 
@@ -102,7 +104,9 @@ export default function RequirementCoverage({
                 {row.confirmed > 0 && <span>{row.confirmed} proven by search</span>}
                 {row.visible > 0 && <span>{row.visible} visible in profile</span>}
                 {row.contradicted > 0 && (
-                  <span className="font-medium text-rose-600">{row.contradicted} contradicted</span>
+                  <span className="font-medium text-rose-600">
+                    {row.contradicted} {row.kind === 'skill' ? 'checked, not there' : 'contradicted'}
+                  </span>
                 )}
                 {row.unknown > 0 && <span>{row.unknown} not evidenced</span>}
               </div>
@@ -123,6 +127,20 @@ export default function RequirementCoverage({
             {' '}{skillRows.length}</strong> required skills at once.
           </span>
         </div>
+      )}
+
+      {verification && verification.probes > 0 && (
+        <p className="mt-5 rounded-card border border-alphanom-line bg-white px-4 py-3 text-xs leading-relaxed text-alphanom-muted">
+          <strong className="font-jakarta font-semibold text-alphanom-navy">
+            {verification.probes} profiles were checked one by one.
+          </strong>{' '}
+          Each check asked Google whether one named profile carries one named skill, at one search
+          credit each. {verification.confirmed} came back confirmed and {verification.absent} came
+          back without the skill on the page.
+          {verification.failed > 0
+            ? ` ${verification.failed} could not be reached and are still counted as untested, not as missing.`
+            : ''}
+        </p>
       )}
 
       {coverage.thinSkillEvidence && (

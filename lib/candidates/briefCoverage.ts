@@ -67,10 +67,24 @@ function plural(n: number, one: string, many: string) {
  * profiles were proven to have Django" reads like good news beside a bar that
  * is almost entirely empty.
  */
-function skillNote(skill: string, confirmed: number, visible: number, total: number): string {
+function skillNote(
+  skill: string,
+  confirmed: number,
+  visible: number,
+  contradicted: number,
+  total: number
+): string {
   const evidenced = confirmed + visible;
 
+  const checked =
+    contradicted > 0
+      ? ` ${contradicted} ${contradicted === 1 ? 'profile was' : 'profiles were'} checked one by one and do not carry ${skill} — a checked no, not a blank.`
+      : '';
+
   if (evidenced === 0) {
+    if (contradicted > 0) {
+      return `Nobody on this list evidences ${skill}.${checked}`;
+    }
     return `Nothing in this search evidenced ${skill} for anyone on the list. That is not proof they lack it — no search demanded the term, and a snippet rarely mentions skills. Putting ${skill} in the requirement makes the tool search for it directly.`;
   }
 
@@ -88,7 +102,7 @@ function skillNote(skill: string, confirmed: number, visible: number, total: num
   // The "what to do about it" line is deliberately NOT repeated here. With
   // three required skills it appeared three times in a row and read as
   // filler; the panel states it once instead.
-  return `${lead}${proven}`;
+  return `${lead}${proven}${checked}`;
 }
 
 export function buildBriefCoverage(
@@ -176,17 +190,25 @@ export function buildBriefCoverage(
     let confirmed = 0;
     let visible = 0;
     let unknown = 0;
+    let contradicted = 0;
+    const key = skill.trim().toLowerCase();
     for (const c of candidates) {
-      const isConfirmed = (c.confirmedSkills ?? []).some(
-        (s) => s.trim().toLowerCase() === skill.trim().toLowerCase()
-      );
-      if (isConfirmed) {
+      if ((c.confirmedSkills ?? []).some((s) => s.trim().toLowerCase() === key)) {
         confirmed += 1;
         continue;
       }
       const text = `${c.currentDesignation ?? ''} ${c.searchSnippet ?? ''}`;
-      if (appearsIn(text, skill)) visible += 1;
-      else unknown += 1;
+      if (appearsIn(text, skill)) {
+        visible += 1;
+        continue;
+      }
+      // A probe aimed at this profile asked for the term and got nothing.
+      // That is a checked "no", not a blank.
+      if ((c.absentSkills ?? []).some((s) => s.trim().toLowerCase() === key)) {
+        contradicted += 1;
+        continue;
+      }
+      unknown += 1;
     }
     rows.push({
       id: `skill:${skill}`,
@@ -195,9 +217,9 @@ export function buildBriefCoverage(
       confirmed,
       visible,
       unknown,
-      contradicted: 0,
+      contradicted,
       total,
-      note: skillNote(skill, confirmed, visible, total),
+      note: skillNote(skill, confirmed, visible, contradicted, total),
     });
   }
 
@@ -239,6 +261,8 @@ export function buildBriefCoverage(
       const every = brief.mustHaveSkills.every(
         (s) => confirmed.has(s.trim().toLowerCase()) || appearsIn(text, s)
       );
+      // (a verified-absent skill can never satisfy `every`, since it is
+      // neither confirmed nor present in the text)
       if (every) allSkills += 1;
     }
   }

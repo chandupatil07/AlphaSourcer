@@ -8,6 +8,7 @@ import { evaluateCandidatesBatch, EvaluationInput } from '@/lib/groq/evaluateCan
 import { calculateDeterministicScore } from '@/lib/scoring/deterministic';
 import { deduplicateCandidates } from '@/lib/candidates/deduplicate';
 import { assessRelevance } from '@/lib/candidates/relevance';
+import { verifyCandidateSkills } from '@/lib/search/verifySkills';
 import { LIMITS } from '@/config/limits';
 import { MATCH_STRENGTH_RANGES, FINAL_SCORE_WEIGHTS } from '@/config/scoring';
 import { nanoid } from '@/lib/utils';
@@ -212,12 +213,38 @@ export async function processSearchPipeline(
     await sessionStore.set(sessionId, session);
 
     // Deterministic scoring is free, so every candidate gets one.
-    const ranked = deduplicatedCandidates
-      .map((candidate) => ({
-        candidate,
-        deterministicScore: calculateDeterministicScore(candidate, searchBrief),
-      }))
-      .sort((a, b) => b.deterministicScore - a.deterministicScore);
+    const scoreAll = () =>
+      deduplicatedCandidates
+        .map((candidate) => ({
+          candidate,
+          deterministicScore: calculateDeterministicScore(candidate, searchBrief),
+        }))
+        .sort((a, b) => b.deterministicScore - a.deterministicScore);
+
+    let ranked = scoreAll();
+
+    // Stage 6a: verify skills on the strongest candidates, then score again.
+    //
+    // Scoring first is what makes this affordable: the probe budget is spent
+    // on the people who can still reach a recruiter rather than on all 239.
+    // Scoring again afterwards is what makes it matter -- a skill settled here
+    // changes the order, and the order is what the recruiter sees.
+    const verification = await verifyCandidateSkills(
+      ranked.map((r) => r.candidate),
+      searchBrief,
+      { elapsed }
+    );
+    if (verification.probes > 0) {
+      ranked = scoreAll();
+      const withConfirmed = deduplicatedCandidates.filter(
+        (c) => (c.confirmedSkills?.length ?? 0) > 0
+      ).length;
+      console.log(
+        `[skills] after verification: ${withConfirmed}/${deduplicatedCandidates.length} ` +
+          `candidates have at least one skill confirmed`
+      );
+    }
+    session.skillVerification = verification;
 
     const forReview = ranked.slice(0, LIMITS.maxCandidatesForEvaluation);
     const remainder = ranked.slice(LIMITS.maxCandidatesForEvaluation);

@@ -197,6 +197,54 @@ export function buildQueries(brief: SearchBrief): SearchQuery[] {
     }
   }
 
+  // Combination probes: one query demanding SEVERAL must-have skills at once.
+  //
+  // A single-skill probe confirms one skill for each profile it returns. A
+  // query naming two or three confirms all of them, for the same credit -- and
+  // the profiles it returns are, by construction, the people who have
+  // everything the brief asked for, which is exactly who should rank at the
+  // top. On a recorded run only 4 of 239 candidates evidenced all three
+  // required skills; nothing in the search was ever asking for all three
+  // together.
+  //
+  // Cheap enough to be worth it even when it returns little: at most four
+  // extra queries, against a shortlist evidence problem that otherwise costs
+  // one credit per candidate to fix.
+  if (primary && brief.mustHaveSkills.length >= 2) {
+    const skills = brief.mustHaveSkills
+      .map((skill) => skill.trim())
+      .filter(Boolean)
+      .slice(0, MAX_SKILL_PROBES);
+
+    if (skills.length >= 2) {
+      const all = skills.map(exactPhrase).filter(Boolean).join(' ');
+      push(
+        `${base} ${quoted(primary)} ${where} ${all}`.trim(),
+        'skill_led',
+        `Every required skill at once: ${skills.join(' + ')}`,
+        skills
+      );
+    }
+
+    // Pairs, for the profiles that carry most but not all of the list.
+    const pairs: Array<[string, string]> = [];
+    for (let i = 0; i < skills.length && pairs.length < 3; i++) {
+      for (let j = i + 1; j < skills.length && pairs.length < 3; j++) {
+        pairs.push([skills[i], skills[j]]);
+      }
+    }
+    if (skills.length > 2) {
+      for (const [a, b] of pairs) {
+        push(
+          `${base} ${quoted(primary)} ${where} ${exactPhrase(a)} ${exactPhrase(b)}`.trim(),
+          'skill_led',
+          `${a} and ${b} together`,
+          [a, b]
+        );
+      }
+    }
+  }
+
   // Without a location the searches above are already broad; with one, add a
   // location-free pass so strong profiles that omit their city are still found.
   if (where && primary) {

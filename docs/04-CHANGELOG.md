@@ -863,3 +863,138 @@ on a parser failure rather than on evidence. Unknown is not elsewhere.
 | Candidates newly excluded by the gate change | **0** |
 | UI files touched | **none** |
 | Owner's `master` | **untouched** |
+
+---
+
+## Session 3, part 4 — asking Google directly, one profile at a time
+
+The coverage panel added in part 2 stated the problem in one line:
+
+```
+Django  6 / 137     2 of 137 evidence all three required skills at once
+```
+
+44 of 239 candidates had any skill confirmed. The other 195 were judged on a
+~160-character snippet that usually names no skills at all. **That is a
+shortage of evidence, not of scoring**, and no amount of tuning fixes it.
+
+Two changes, cheapest first.
+
+### 1. Combination probes — four extra queries, no new mechanism
+
+A single-skill probe confirms one skill for every profile it returns. A query
+naming two or three confirms all of them **for the same credit**, and the
+profiles it returns are by construction the people who carry everything the
+brief asked for — exactly who should be at the top.
+
+Nothing in the search had ever asked for all three skills together. Now it
+does, plus up to three pairs:
+
+```
+site:linkedin.com/in/ "Senior Backend Engineer" (Bangalore OR …) "Python" "Django" "AWS"
+site:linkedin.com/in/ "Senior Backend Engineer" (Bangalore OR …) "Python" "Django"
+site:linkedin.com/in/ "Senior Backend Engineer" (Bangalore OR …) "Python" "AWS"
+site:linkedin.com/in/ "Senior Backend Engineer" (Bangalore OR …) "Django" "AWS"
+```
+
+Measured on the run4 brief: **18 → 22 queries, skill probes 3 → 7, and all 22
+still name the city** (the property the company-branch fix established).
+Roughly 8 extra credits.
+
+### 2. Per-candidate verification — `lib/search/verifySkills.ts`
+
+```
+site:in.linkedin.com/in/<slug> "Django"
+```
+
+One query, one credit, one settled fact. Google matches the whole indexed
+page, so a hit proves the term is on that profile.
+
+**And a miss is evidence too — the first place in this codebase where that is
+true.** Everywhere else absence is deliberately never a failure, because a
+snippet that omits a skill proves nothing. This probe is different: the page
+is *known to be indexed*, since Google returned it in the first place, and the
+query named both the page and the term. Nothing back means the indexed page
+does not carry the term.
+
+A probe that **errors** is not a miss. Rate limits and network failures leave
+the skill untested, exactly as if it had never been probed.
+
+No `gl`/`hl` country bias on these queries: everywhere else the hint improves
+retrieval, but here the query names one exact page and a regional bias can
+only suppress the answer.
+
+#### Where it runs, and what bounds it
+
+Score everything (free) → verify the strongest → **score again**. Scoring
+first is what makes it affordable; scoring again is what makes it matter,
+since the order is what the recruiter sees.
+
+Three bounds, because this is the only stage whose cost grows with the
+candidate count — all overridable by env var without a code change:
+
+| bound | default | env |
+|---|---|---|
+| candidates probed | 25 | `SKILL_VERIFY_CANDIDATES` |
+| total probes | 60 | `SKILL_VERIFY_PROBES` |
+| wall-clock cutoff | 30s | `SKILL_VERIFY_DEADLINE_MS` |
+| off switch | on | `SKILL_VERIFICATION=off` |
+
+Planned against the recorded run4 brief: **54 probes across the top 25**, on
+top of the ~40 a search costs today — about **94 credits per search**, and
+2,384 remain.
+
+### 3. The skill score, generalised to three states
+
+```
+  1.0  found     confirmed by a query, or visible in the text
+  0.0  absent    a probe named this profile and this term and got nothing
+  0.5  untested  nothing either way
+```
+
+`score = 100 × mean(evidence)`.
+
+Absent is the only signal in the pipeline allowed to push a skill score below
+the neutral floor. A run with no probes contains no absent skills, so it
+scores **exactly** as before — verified, not asserted:
+
+| | before | after |
+|---|---|---|
+| `eval/skills.ts` on run4 | 50 / 67 / 83 / 100 | **50 / 67 / 83 / 100** |
+| `eval/accuracy.ts` on run4 | 100% / 90% / 70% | **100% / 90% / 70%** |
+
+What changes only once probes run:
+
+```
+  1 confirmed, 2 untested          -> 67
+  1 confirmed, 2 checked & absent  -> 33
+  2 confirmed, 1 untested          -> 83
+  2 confirmed, 1 checked & absent  -> 67
+  0 confirmed, 3 checked & absent  ->  0
+```
+
+### 4. The panel reports what the credits bought
+
+A verified-absent skill now shows **red — "checked, not there"** rather than
+grey "not evidenced", because those are different facts. The panel also states
+the cost and outcome: how many profiles were checked, how many confirmed, how
+many came back without the skill, and how many could not be reached and
+therefore remain untested.
+
+### What is NOT claimed
+
+**No before/after improvement number is reported here, because the probes have
+not been run.** They need a live search, which spends credits. The coverage
+panel is the instrument: `Django 6/137` today, and whatever it reads after the
+next run. It will be recorded when it is measured, not before.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ clean |
+| `next build` from a clean tree, `.next` deleted | ✅ all routes compiled |
+| `eval/replay.ts` · `eval/prove.ts` · `eval/skills.ts` · `eval/accuracy.ts` | ✅ all pass |
+| Scores on recorded runs (no probes) | **identical to before** |
+| Queries still naming the city | 22 / 22 |
+| Owner's `master` | **untouched** |

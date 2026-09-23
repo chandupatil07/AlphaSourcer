@@ -11,6 +11,7 @@ export function calculateDeterministicScore(
     searchSnippet: string;
     yearsExperience?: number | null;
     confirmedSkills?: string[] | null;
+    absentSkills?: string[] | null;
   },
   brief: SearchBrief
 ): number {
@@ -47,7 +48,8 @@ export function calculateDeterministicScore(
           candidate.searchSnippet,
           brief.mustHaveSkills,
           brief.goodToHaveSkills,
-          candidate.confirmedSkills ?? []
+          candidate.confirmedSkills ?? [],
+          candidate.absentSkills ?? []
         )
       : null
   );
@@ -170,11 +172,14 @@ function calculateTitleScore(
  * confirmed Bangalore location reached 98.
  *
  * So the evidence is counted directly instead. NEUTRAL is what a profile with
- * no readable skill evidence scores -- unchanged from before, because absence
- * from a 160-character snippet is still not proof of absence. Every skill
- * actually evidenced lifts the score above that floor. Nobody lands below
- * where the old code put them; the change only separates the candidates it
- * used to award full marks on partial evidence.
+ * no readable skill evidence scores, because absence from a 160-character
+ * snippet is not proof of absence. Every skill actually evidenced lifts the
+ * score above that floor.
+ *
+ * `absentSkills` is the one thing that can pull a score below it: a probe
+ * aimed at that single profile asked Google for the term and got nothing back.
+ * That is evidence, not silence. A run with no probes contains no absent
+ * skills, so it scores exactly as it did before.
  */
 const SKILL_NEUTRAL = 50;
 
@@ -200,10 +205,12 @@ export function calculateSkillScore(
   snippet: string,
   mustHaveSkills: string[],
   goodToHaveSkills: string[],
-  confirmedSkills: string[] = []
+  confirmedSkills: string[] = [],
+  absentSkills: string[] = []
 ): number {
   const content = `${currentTitle || ''} ${snippet}`;
   const confirmed = new Set(confirmedSkills.map((s) => s.trim().toLowerCase()));
+  const absent = new Set(absentSkills.map((s) => s.trim().toLowerCase()));
 
   const has = (skill: string) =>
     confirmed.has(skill.trim().toLowerCase()) || skillAppearsIn(content, skill);
@@ -215,10 +222,24 @@ export function calculateSkillScore(
 
   if (mustHaveSkills.length === 0) return Math.min(100, SKILL_NEUTRAL + goodBonus);
 
-  const found = mustHaveSkills.filter(has).length;
-  const evidence = found / mustHaveSkills.length;
-  const mustScore = SKILL_NEUTRAL + (100 - SKILL_NEUTRAL) * evidence;
+  // Three kinds of evidence, scored on one scale:
+  //
+  //   1.0  found      -- confirmed by a query, or visible in the text
+  //   0.0  absent     -- a probe aimed at THIS profile asked for the term and
+  //                      Google returned nothing. Real negative evidence, and
+  //                      the only thing that can pull a candidate below the
+  //                      neutral floor.
+  //   0.5  untested   -- nothing either way. Exactly the old neutral, so a run
+  //                      with no probes scores identically to before.
+  const UNTESTED = SKILL_NEUTRAL / 100;
+  let total = 0;
+  for (const skill of mustHaveSkills) {
+    if (has(skill)) total += 1;
+    else if (absent.has(skill.trim().toLowerCase())) total += 0;
+    else total += UNTESTED;
+  }
 
+  const mustScore = (total / mustHaveSkills.length) * 100;
   return Math.min(100, mustScore + goodBonus);
 }
 /**

@@ -159,7 +159,11 @@ export default function CandidateResults({ session }: { session: SearchSession }
           Scores alone could not show this: a brief could name Django and the
           shortlist could evidence it for almost nobody, and the screen would
           look identical either way. */}
-      <RequirementCoverage candidates={sortedCandidates} brief={session.searchBrief} />
+      <RequirementCoverage
+        candidates={sortedCandidates}
+        brief={session.searchBrief}
+        verification={session.skillVerification}
+      />
 
       <div className="card p-5 sm:p-6">
         <CandidateFilters
