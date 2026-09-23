@@ -98,9 +98,39 @@ const BARE_CITY_PATTERN = new RegExp(
 /** The same alternation, global, for scanning every city in a segment. */
 const BARE_CITY_PATTERN_ALL = new RegExp(BARE_CITY_PATTERN.source, 'gi');
 
+/**
+ * Words that genuinely belong in front of a place name. Everything else
+ * sitting there is headline text -- "Wipro Bellevue", "Kubernetes Bengaluru".
+ */
+const PLACE_QUALIFIERS = new Set([
+  'greater', 'north', 'south', 'east', 'west', 'central', 'upper', 'lower',
+  'new', 'old', 'near', 'metropolitan', 'metro',
+]);
+
 const trimTail = (value: string) => value.replace(/[.\s]+$/, '').trim();
 
 const titleCase = (value: string) => value.replace(/\b\w/g, (c) => c.toUpperCase());
+
+/**
+ * Cuts a location string back to the place itself.
+ *
+ * Google runs a location straight on into whatever follows it, and the
+ * "Location:" label copies the lot. From a live run:
+ *   "Bangalore ... Bengaluru, Karnataka, India. Working as"
+ *   "Bengaluru / Pune - Work From Office (time)"
+ */
+function tidyLocation(value: string): string {
+  return value
+    // An ellipsis separates a truncated earlier mention from the real one.
+    .replace(/^.*?\.{2,}\s*/, '')
+    .replace(/^.*?\u2026\s*/, '')
+    // The sentence after the place is commentary.
+    .split(/\.\s+/)[0]
+    // A dash introduces a note: "Bengaluru - Work From Office".
+    .split(/\s+[\u2013\u2014-]\s+/)[0]
+    .replace(/[,.;:\s]+$/, '')
+    .trim();
+}
 
 /**
  * Trims a segment back to where the place name actually starts.
@@ -137,7 +167,14 @@ function trimToCity(segment: string): string {
   // of the place name, so "Greater Toronto Area" survives intact while
   // "Building Scalable Backend Systems Bengaluru" does not.
   const prefix = segment.slice(0, at).trim();
-  const looksLikeProse = prefix.split(/\s+/).length > 2 || /[.:;|]/.test(prefix);
+  const words = prefix.split(/\s+/);
+  // Anything in front of the place name is headline text unless it is a real
+  // qualifier. "Greater Toronto Area" keeps its "Greater"; "Wipro Bellevue"
+  // and "Kubernetes Bengaluru" lose theirs.
+  const looksLikeProse =
+    words.length > 1 ||
+    /[.:;|]/.test(prefix) ||
+    !PLACE_QUALIFIERS.has(words[0].toLowerCase());
   return looksLikeProse ? segment.slice(at).trim() : segment;
 }
 
@@ -158,7 +195,7 @@ function locationFromSnippet(snippet: string): string | null {
   // "... Location: Bengaluru ..." — an explicit label beats any inference.
   const labelled = text.match(/Location:\s*([^·•|]+)/i);
   if (labelled) {
-    const value = trimTail(clean(labelled[1]));
+    const value = tidyLocation(trimTail(clean(labelled[1])));
     if (value && value.length <= 60) return value;
   }
 
@@ -193,7 +230,12 @@ function locationFromSnippet(snippet: string): string | null {
         }
       }
       parts[0] = trimToCity(parts[0]);
-      const value = parts.join(', ');
+      // A location can run on into commentary: "Bengaluru, Karnataka, India.
+      // Working as ..." and "Bengaluru / Pune - Work From Office". Cut at the
+      // sentence break and at a dash that introduces a note.
+      const last = parts.length - 1;
+      parts[last] = tidyLocation(parts[last]);
+      const value = parts.join(', ').replace(/[,.;:\s]+$/, '').trim();
       if (value.length <= 60) return value;
     }
   }
@@ -220,6 +262,17 @@ function locationFromSnippet(snippet: string): string | null {
  *     to a known city or country is rejected.
  */
 
+/**
+ * Consumer email providers. A headline that prints a contact address was
+ * yielding "gmail.com" as the employer. Kept as an explicit list rather than
+ * a general domain rule, because real employers are named this way too --
+ * udaan.com is a company, not a mistake.
+ */
+const EMAIL_PROVIDERS = new Set([
+  'gmail.com', 'gmail', 'yahoo.com', 'yahoo', 'hotmail.com', 'outlook.com',
+  'rediffmail.com', 'icloud.com', 'protonmail.com', 'live.com',
+]);
+
 /** Words that mean the following name is not where the candidate works now. */
 const NOT_CURRENT_EMPLOYER = /^(?:ex|former|formerly|previously|prev|the|a|an|my|our|we)\b/i;
 
@@ -241,22 +294,43 @@ const NOT_A_COMPANY = new Set([
 
 function cleanEmployer(raw: string | undefined): string | null {
   if (!raw) return null;
-  let value = clean(raw)
+
+  const base = clean(raw)
     // Stop at the first separator: a headline continues past the employer.
     .split(/[|·•]/)[0]
     // Google's own section labels can be swept into the capture, turning
     // "Experience InMobi 5 years" into the employer "Experience InMobi".
     .replace(/^(?:experience|education|location|about|skills)\s+/i, '')
-    .replace(/[,.;:\-\s]+$/, '')
+    // Google truncates long headlines, so real employers arrive as
+    // "Microsoft ...", "InMobi ...", "Clickhouse ...".
+    .replace(/\s*(?:\.{2,}|\u2026)\s*$/, '')
     .trim();
 
-  if (!value || value.length > 60) return null;
-  if (NOT_CURRENT_EMPLOYER.test(value)) return null;
-  if (NOT_A_COMPANY.has(value.toLowerCase())) return null;
-  // "at Bangalore" is a place, not an employer.
-  if (countryOfPlace(value)) return null;
+  if (!base) return null;
 
-  return value;
+  // A capture can hold several sentences, and the employer is not always the
+  // first: "Experience. CRED" and "Bengaluru, Karnataka, India. TapQwik" both
+  // open with something that is not a company and then name one. Taking the
+  // first sentence blindly threw away four real employers on a live run, so
+  // this takes the first PLAUSIBLE one instead.
+  for (const sentence of base.split(/\.\s+/)) {
+    const value = sentence.replace(/[,.;:\-\s]+$/, '').trim();
+    if (!value || value.length > 60) continue;
+    if (NOT_CURRENT_EMPLOYER.test(value)) continue;
+
+    const lower = value.toLowerCase();
+    if (NOT_A_COMPANY.has(lower)) continue;
+    if (EMAIL_PROVIDERS.has(lower)) continue;
+
+    // A place is not an employer -- neither on its own, nor opening a comma
+    // run as in "Bengaluru, Karnataka, India".
+    if (countryOfPlace(value)) continue;
+    if (countryOfPlace(value.split(',')[0])) continue;
+
+    return value;
+  }
+
+  return null;
 }
 
 function employerFromSnippet(snippet: string): string | null {
