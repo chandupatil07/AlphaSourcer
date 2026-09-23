@@ -647,3 +647,123 @@ settled labels, not disputed ones.
 | `npx tsx eval/skills.ts eval/fixtures/run4-new-code.json` | ✅ 4 distinct values, no warning |
 | UI files touched | **none** |
 | Owner's `master` | **untouched** |
+
+---
+
+## Session 3, part 2 — the requirement itself
+
+Two questions the product could not answer about its own work:
+
+1. Before a search: **is this requirement good enough to spend a search on?**
+2. After a search: **did the shortlist actually deliver what the requirement asked for?**
+
+Both gaps were invisible because nothing on screen ever asked them.
+
+### 1. A brief with nothing in it ran a full search
+
+`buildClarifications` already detected every gap — no title, no location, no
+experience, no skills — and the panel already listed them. Every one was
+**optional**: "Search as-is" was always enabled. A requirement reading
+`backend dev` therefore ran the whole pipeline (~36 Serper credits, about a
+minute) and returned whoever happened to be indexed. The gaps were found and
+then not acted on.
+
+**New:** `lib/search/briefQuality.ts` — `assessBrief()` returns
+`ready` / `workable` / `unusable` plus the gaps, each with the consequence
+stated in terms of what the pipeline actually does:
+
+| gap | what actually happens |
+|---|---|
+| no title | every query is `site:linkedin.com/in/` + a title; there is nothing to search for |
+| no location | the location filter is skipped, profiles come back worldwide |
+| no skills | the heaviest weight in the score has nothing to test |
+| no experience | seniority is not filtered — interns and directors together |
+| no companies | company-led queries are skipped |
+
+A brief is **unusable** only when it has no title, no must-have skill and no
+named company — the three things `buildQueries` can anchor on. Then the
+search button is disabled and says what to add.
+
+Model-inferred employers deliberately do **not** unblock it. Measured on
+`run4`: the brief named no company, yet the model inferred ten (Flipkart,
+Zomato, Swiggy…) and ten company-led queries ran off them. Letting a guess
+count as an answer would mean the brief most in need of a human is the one
+that quietly proceeds without one. The panel now says "Companies were
+guessed, not given" instead of the previous, simply wrong, "company searches
+are skipped".
+
+### 2. The suggested rewrite ignored the answers, and gave up on vague briefs
+
+Two faults in one panel:
+
+- Picking "Bangalore" from the questions left the suggested wording with no
+  city in it — the one place that says *this is the phrasing that works* was
+  the one place the answers never reached. It is now rebuilt live from them.
+- For a brief with nothing in it, `suggestPrompt` emitted **`Find
+  candidates.`** The brief that most needed a worked example got two useless
+  words. Every slot is now always present, with angle-bracket placeholders
+  for the missing parts:
+
+```
+Find <job title> profiles, with <min>–<max> years of experience,
+based in <city or country>, with hands-on <skill>, <skill>.
+
+Prioritise candidates currently at: <company>, <company>.
+```
+
+Plus a Copy button, since the wording is meant to be reused.
+
+### 3. Nothing ever showed whether the brief was met
+
+`components/candidates/RequirementCoverage.tsx` + `lib/candidates/briefCoverage.ts`:
+for the list on screen, every requirement line with **three** states, never
+two — proven by the search that found them, visible in the profile text, or
+**not evidenced either way**. Collapsing unknown into "does not have it"
+would be the same mistake the skill scoring made.
+
+On the real `run4` shortlist of 137:
+
+```
+Senior Backend Engineer  JOB TITLE         104 / 137
+Bangalore                LOCATION           99 / 137
+Python                   MUST-HAVE SKILL    20 / 137   (12 proven, 8 visible)
+Django                   MUST-HAVE SKILL     6 / 137   ( 4 proven, 2 visible)
+AWS                      MUST-HAVE SKILL    25 / 137   (12 proven, 13 visible)
+4–7 years                EXPERIENCE         18 / 137   (13 contradicted)
+
+2 of 137 evidence all 3 required skills at once.
+```
+
+Every row sums to 137 — the four states partition the list, verified against
+the fixture rather than asserted.
+
+That table is the whole point. **A screen showing this would have exposed the
+skill-score bug on day one**, and it is the number that makes the next piece
+of work (per-candidate skill probes) obviously worth its credits rather than
+a guess.
+
+### 4. Four smaller interface faults
+
+| | before | after |
+|---|---|---|
+| Ctrl+Enter shortcut | bound to `onKeyPress`, which Firefox does not fire for Ctrl+Enter — the shortcut printed under the box did nothing there | `onKeyDown`, works everywhere |
+| analysis fails | fell through to a **full search** — ~36 credits spent at the exact moment the tool had just failed to understand the brief | says so, offers "Search it as written" |
+| example briefs | one, engineering only | three, across engineering, sales and data |
+| "how it works" | three steps that omitted the review screen | names it, so the review reads as the point rather than an interruption |
+
+Also: a character/word hint under the box that names the four fields that
+change results most, and a disabled search button while the box is empty.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ clean |
+| `next build` from a clean tree, fresh `npm ci`, `.next` deleted | ✅ all routes compiled |
+| `npx tsx eval/replay.ts b.json` | ✅ |
+| `npx tsx eval/prove.ts eval/fixtures/run1-before-fixes.json` | ✅ |
+| `npx tsx eval/skills.ts eval/fixtures/run4-new-code.json` | ✅ 4 distinct values |
+| New panels rendered and read at 1100px and at 390px | ✅ no overflow, no clipping |
+| Coverage states sum to the list size | ✅ 137 / 137 on every row |
+| Scoring, ranking or filtering changed | **none** — this part is interface only |
+| Owner's `master` | **untouched** |

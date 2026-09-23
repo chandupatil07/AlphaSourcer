@@ -5,6 +5,7 @@ import { SearchSession } from '@/types/index';
 import CandidateTable from './CandidateTable';
 import CandidateFilters from './CandidateFilters';
 import ExportButton from './ExportButton';
+import RequirementCoverage from './RequirementCoverage';
 
 export default function CandidateResults({ session }: { session: SearchSession }) {
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
@@ -153,6 +154,12 @@ export default function CandidateResults({ session }: { session: SearchSession }
           ))}
         </div>
       </div>
+
+      {/* Whether the requirement was actually met, before the list itself.
+          Scores alone could not show this: a brief could name Django and the
+          shortlist could evidence it for almost nobody, and the screen would
+          look identical either way. */}
+      <RequirementCoverage candidates={sortedCandidates} brief={session.searchBrief} />
 
       <div className="card p-5 sm:p-6">
         <CandidateFilters

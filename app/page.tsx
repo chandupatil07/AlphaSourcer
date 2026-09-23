@@ -7,13 +7,39 @@ import RequirementInput from '@/components/search/RequirementInput';
 import AdvancedFilters from '@/components/search/AdvancedFilters';
 import RefinePanel, { AnalyzeResult } from '@/components/search/RefinePanel';
 
-const EXAMPLE =
-  'Looking for a Senior Backend Engineer with 4–7 years of experience in Python, Django, AWS and microservices. Candidates should preferably have product startup experience. Location: Bangalore.';
+/**
+ * Each example is a complete brief: title, skills, experience and location.
+ * A single example taught the shape for one role family only, so anyone
+ * hiring outside engineering had nothing to copy.
+ */
+const EXAMPLES = [
+  {
+    chip: 'Senior Backend Engineer · Bangalore',
+    text: 'Looking for a Senior Backend Engineer with 4–7 years of experience in Python, Django, AWS and microservices. Candidates should preferably have product startup experience. Location: Bangalore.',
+  },
+  {
+    chip: 'Enterprise Sales · Mumbai',
+    text: 'Looking for an Enterprise Sales Manager with 5–8 years of B2B SaaS sales experience, carrying an annual quota and selling to CIOs. Must have experience with Salesforce and outbound prospecting. Location: Mumbai.',
+  },
+  {
+    chip: 'Data Scientist · Pune or Hyderabad',
+    text: 'Looking for a Data Scientist with 3–6 years of experience in Python, SQL and machine learning, ideally with NLP exposure. Prefer candidates from product companies. Location: Pune or Hyderabad.',
+  },
+];
 
+/** The real flow, in the order it happens. The middle step used to be left
+ *  out, which made the review screen look like an interruption rather than
+ *  the point. */
 const STEPS = [
   { title: 'Describe the role', body: 'Paste a JD or write it in plain language.' },
-  { title: 'AI builds the strategy', body: 'Multiple X-ray angles across LinkedIn.' },
-  { title: 'Get a ranked shortlist', body: 'Scored, explained, exportable to Excel.' },
+  {
+    title: 'Check what was understood',
+    body: 'See the title, skills, experience and location it read — and fix them before anything runs.',
+  },
+  {
+    title: 'Get a ranked shortlist',
+    body: 'Scored and explained, with a note on how much of your brief each candidate actually evidences.',
+  },
 ];
 
 export default function Home() {
@@ -45,9 +71,15 @@ export default function Home() {
       if (!response.ok) throw new Error(data.error || 'Could not analyse requirement');
       setAnalysis(data as AnalyzeResult);
     } catch (err) {
-      // Analysis is a convenience, not a gate — fall through to searching.
+      // Previously this fell through to a full search. That spent roughly 36
+      // search credits and a minute on a requirement nobody had reviewed, at
+      // the exact moment the tool had just failed to understand it. Say so
+      // and let the recruiter decide instead.
       console.error(err);
-      await runSearch('');
+      setError(
+        'Could not read that requirement. You can still search it as written, or edit it and try again.'
+      );
+      setAnalysis(null);
     } finally {
       setAnalyzing(false);
     }
@@ -78,10 +110,6 @@ Additional requirements: ${extraDetail.trim()}`
       setError(err instanceof Error ? err.message : 'Search failed');
       setLoading(false);
     }
-  };
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && e.ctrlKey) handleAnalyze();
   };
 
   return (
@@ -127,28 +155,42 @@ Additional requirements: ${extraDetail.trim()}`
           <RequirementInput
             value={requirement}
             onChange={setRequirement}
-            onKeyPress={handleKeyPress}
+            onSubmitShortcut={handleAnalyze}
             loading={loading || analyzing}
             onSearch={handleAnalyze}
           />
 
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-alphanom-line pt-4">
             <span className="section-label">Try</span>
-            <button
-              type="button"
-              onClick={() => setRequirement(EXAMPLE)}
-              disabled={loading}
-              className="rounded-pill border border-alphanom-line px-3 py-1.5 text-xs font-medium text-alphanom-muted transition-colors hover:border-alphanom-teal hover:bg-alphanom-teal-soft hover:text-alphanom-navy disabled:opacity-50"
-            >
-              Senior Backend Engineer · Bangalore
-            </button>
+            {EXAMPLES.map((example) => (
+              <button
+                key={example.chip}
+                type="button"
+                onClick={() => setRequirement(example.text)}
+                disabled={loading}
+                className="rounded-pill border border-alphanom-line px-3 py-1.5 text-xs font-medium text-alphanom-muted transition-colors hover:border-alphanom-teal hover:bg-alphanom-teal-soft hover:text-alphanom-navy disabled:opacity-50"
+              >
+                {example.chip}
+              </button>
+            ))}
           </div>
         </section>
         )}
 
         {error && (
-          <div className="mt-4 rounded-card border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-            {error}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-card border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            <span>{error}</span>
+            {/* An error with no way forward is a dead end. The requirement is
+                still in the box, so offer the one action that makes sense. */}
+            {requirement.trim() && !loading && (
+              <button
+                type="button"
+                onClick={() => runSearch('')}
+                className="shrink-0 rounded-pill border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-800 transition-colors hover:bg-rose-100"
+              >
+                Search it as written
+              </button>
+            )}
           </div>
         )}
 

@@ -1,4 +1,5 @@
 import { SearchBrief } from '@/types/index';
+import { assessBrief, BriefQuality } from '@/lib/search/briefQuality';
 
 export interface ClarifyOption {
   label: string;
@@ -17,6 +18,11 @@ export interface ClarifyResult {
   questions: ClarifyQuestion[];
   suggestedPrompt: string;
   understood: string[];
+  /**
+   * Whether this brief is worth spending a search on. Previously every gap
+   * below was optional and a one-line requirement ran the full pipeline.
+   */
+  quality: BriefQuality;
 }
 
 /**
@@ -99,6 +105,7 @@ export function buildClarifications(brief: SearchBrief): ClarifyResult {
     questions,
     suggestedPrompt: suggestPrompt(brief),
     understood: summarise(brief),
+    quality: assessBrief(brief),
   };
 }
 
@@ -127,23 +134,31 @@ function summarise(brief: SearchBrief): string[] {
 /**
  * Rewrites the brief as a well-formed requirement, so the user can see the
  * shape that searches well and reuse it.
+ *
+ * Every slot is always present. It used to emit only what it had, so the one
+ * brief that most needed a worked example -- a vague one -- got back the two
+ * words "Find candidates.", which teaches nothing and cannot be edited into
+ * anything. Missing pieces now come back as angle-bracket placeholders: the
+ * recruiter can see the full shape and type over the blanks.
  */
 function suggestPrompt(brief: SearchBrief): string {
-  const parts: string[] = [];
-
   const titles = [brief.primaryTitle, ...brief.alternativeTitles.slice(0, 3)]
     .filter(Boolean)
     .join(' or ');
-  parts.push(titles ? `Find ${titles} profiles` : 'Find candidates');
 
-  if (brief.minExperience !== null || brief.maxExperience !== null) {
-    parts.push(`with ${brief.minExperience ?? 0}–${brief.maxExperience ?? 'any'} years of experience`);
-  }
+  const parts: string[] = [
+    `Find ${titles || '<job title>'} profiles`,
+    brief.minExperience !== null || brief.maxExperience !== null
+      ? `with ${brief.minExperience ?? 0}–${brief.maxExperience ?? 'any'} years of experience`
+      : 'with <min>–<max> years of experience',
+    brief.locations.length > 0
+      ? `based in ${brief.locations.join(' or ')}`
+      : 'based in <city or country>',
+    brief.mustHaveSkills.length > 0
+      ? `with hands-on ${brief.mustHaveSkills.slice(0, 5).join(', ')}`
+      : 'with hands-on <skill>, <skill>',
+  ];
 
-  if (brief.locations.length > 0) parts.push(`based in ${brief.locations.join(' or ')}`);
-  if (brief.mustHaveSkills.length > 0) {
-    parts.push(`with hands-on ${brief.mustHaveSkills.slice(0, 5).join(', ')}`);
-  }
   if (brief.preferredIndustries.length > 0) {
     parts.push(`from a ${brief.preferredIndustries.join(' or ')} background`);
   }
@@ -152,6 +167,8 @@ function suggestPrompt(brief: SearchBrief): string {
 
   if (brief.preferredCompanies.length > 0) {
     prompt += `\n\nPrioritise candidates currently at: ${brief.preferredCompanies.join(', ')}.`;
+  } else if (brief.preferredIndustries.length === 0) {
+    prompt += '\n\nPrioritise candidates currently at: <company>, <company>.';
   }
 
   return prompt;
