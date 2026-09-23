@@ -109,9 +109,16 @@ export async function evaluateCandidatesBatch(
 ): Promise<CandidateEvaluation[]> {
   if (candidates.length === 0) return [];
 
-  const prompt = BATCH_PROMPT.replace('{brief}', compactBrief(brief)).replace(
+  // Replacer functions, not strings. String.replace treats $&, $` and $' in
+  // the REPLACEMENT as substitution patterns even when the search pattern is
+  // a plain string. The candidate block is built from names, headlines and
+  // Google snippets -- text this code does not control -- so one profile
+  // containing $' would splice the template into itself and truncate the
+  // instructions for the whole batch, silently degrading ten evaluations at
+  // once. A replacer function disables the substitution.
+  const prompt = BATCH_PROMPT.replace('{brief}', () => compactBrief(brief)).replace(
     '{candidates}',
-    candidates.map(describe).join('\n')
+    () => candidates.map(describe).join('\n')
   );
 
   const response = await groqRequest<{ evaluations?: Array<CandidateEvaluation & { index?: number }> }>(

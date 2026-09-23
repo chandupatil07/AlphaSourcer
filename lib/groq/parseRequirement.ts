@@ -72,7 +72,12 @@ RULES:
 - roleFamily: must be one of: Technology, Sales, Recruitment, Finance, Operations, Marketing, Product, Design, Customer Success, Generic`;
 
 export async function parseRequirement(requirement: string): Promise<SearchBrief> {
-  const prompt = PARSE_REQUIREMENT_PROMPT.replace('{requirement}', requirement);
+  // Replaced via a function, not a string. String.replace treats $&, $` and
+  // $' in the REPLACEMENT as substitution patterns even when the search
+  // pattern is a plain string, so a requirement containing $' would splice
+  // part of the template back into itself and drop the rules that follow.
+  // A replacer function disables that entirely.
+  const prompt = PARSE_REQUIREMENT_PROMPT.replace('{requirement}', () => requirement);
 
   const messages = [
     {
