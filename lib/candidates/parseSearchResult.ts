@@ -131,7 +131,14 @@ function trimToCity(segment: string): string {
 
   // match[1] is the separator the pattern consumed before the name.
   const at = last.index + (last[1] ? last[1].length : 0);
-  return at > 0 ? segment.slice(at).trim() : segment;
+  if (at <= 0) return segment;
+
+  // Only cut when what precedes the city reads as prose rather than as part
+  // of the place name, so "Greater Toronto Area" survives intact while
+  // "Building Scalable Backend Systems Bengaluru" does not.
+  const prefix = segment.slice(0, at).trim();
+  const looksLikeProse = prefix.split(/\s+/).length > 2 || /[.:;|]/.test(prefix);
+  return looksLikeProse ? segment.slice(at).trim() : segment;
 }
 
 /**
@@ -173,9 +180,18 @@ function locationFromSnippet(snippet: string): string | null {
       // Reach back far enough to carry the city with its anchor:
       // "Bengaluru, Karnataka, India" anchors on the country two segments on.
       const from = isCountry ? Math.max(0, i - 2) : isRegion ? Math.max(0, i - 1) : i;
-      const parts = segments.slice(from, i + 1);
-      // The first segment may carry prose ahead of the place name, because
-      // Google does not always put a comma before the city.
+      let parts = segments.slice(from, i + 1);
+
+      // Reaching back from a country anchor can sweep in earlier segments
+      // that are pure prose: "Clean, maintainable platforms. Otto Car UCL.
+      // London, England" was being stored whole. Start at the last segment
+      // that actually names a city, then trim that one back to the name.
+      for (let k = parts.length - 1; k >= 0; k--) {
+        if (BARE_CITY_PATTERN.test(parts[k])) {
+          parts = parts.slice(k);
+          break;
+        }
+      }
       parts[0] = trimToCity(parts[0]);
       const value = parts.join(', ');
       if (value.length <= 60) return value;
