@@ -17,6 +17,20 @@ const SUBTITLE_SEPARATOR = /\s*[·•]\s*/;
 // A LinkedIn result title reads "Name - Headline".
 const NAME_SEPARATOR = ' - ';
 
+/**
+ * Google appends its own page-title suffix to every LinkedIn result:
+ * "Name - Headline - LinkedIn". Left in place it becomes part of the job
+ * title, so 95 of 644 recorded candidates carried designations like
+ * "Senior Backend Engineer - LinkedIn" -- shown to the recruiter, written
+ * into the Excel export, and tokenised into the title score, where the extra
+ * term dilutes the match against the requested title.
+ *
+ * Only a TRAILING suffix is removed, and only after a separator, so an
+ * employer named in the headline ("Backend Engineer at LinkedIn") survives.
+ * Truncated forms appear too, because Google clips long titles.
+ */
+const LINKEDIN_SUFFIX = /\s*[-|\u2013\u2014]\s*Linked\s?In?\s*$/i;
+
 function clean(value: string | undefined | null): string {
   return (value || '').replace(/\s+/g, ' ').trim();
 }
@@ -154,10 +168,20 @@ function locationFromSnippet(snippet: string): string | null {
 /** Words that mean the following name is not where the candidate works now. */
 const NOT_CURRENT_EMPLOYER = /^(?:ex|former|formerly|previously|prev|the|a|an|my|our|we)\b/i;
 
-/** Generic page furniture that is never a company name. */
+/**
+ * Page furniture and bare technology names, neither of which is an employer.
+ *
+ * "Senior Backend Engineer, Python" alongside "at GCP" yielded the employer
+ * "GCP" -- a platform, not a company. These are rejected only as a WHOLE
+ * value, so "Amazon AWS" and "Microsoft Azure" still resolve correctly.
+ */
 const NOT_A_COMPANY = new Set([
   'linkedin', 'linkedln', 'india', 'experience', 'education', 'location',
   'present', 'company', 'university', 'college', 'institute', 'school',
+  'gcp', 'aws', 'azure', 'kubernetes', 'docker', 'react', 'angular', 'vue',
+  'node', 'nodejs', 'java', 'python', 'golang', 'sql', 'mysql', 'postgres',
+  'postgresql', 'mongodb', 'redis', 'kafka', 'linux', 'git', 'django',
+  'spring', 'springboot', 'flask', 'typescript', 'javascript',
 ]);
 
 function cleanEmployer(raw: string | undefined): string | null {
@@ -267,7 +291,7 @@ function yearsFromSnippet(text: string): number | null {
  * pipeline off the Groq token budget and out of rate-limit territory.
  */
 export function parseSearchResult(result: SearchResult): ParsedCandidate {
-  const title = clean(result.title);
+  const title = clean(result.title).replace(LINKEDIN_SUFFIX, '').trim();
   const subtitle = clean(result.subtitle);
 
   const titleParts = title.split(NAME_SEPARATOR);
