@@ -37,7 +37,14 @@ export default function ExportButton({ candidates, roleName, removed = [] }: Exp
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `AlphaSourcer_${roleName}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      // The server already sets a sanitised filename in Content-Disposition,
+      // but `download` overrides it. Unsanitised, a role like
+      // "Backend/Frontend Engineer" puts a path separator in the filename and
+      // the browser keeps only the part after it. Same rule as the server's
+      // getExcelFileName, inlined rather than imported so the client bundle
+      // does not pull in exceljs.
+      const safeRole = roleName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '') || 'Candidates';
+      a.download = `AlphaSourcer_${safeRole}_${new Date().toISOString().split('T')[0]}.xlsx`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);

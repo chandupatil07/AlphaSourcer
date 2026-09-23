@@ -29,6 +29,18 @@ export default function SearchPage() {
 
       try {
         const response = await fetch(`/api/search?sessionId=${sessionId}`);
+
+        // A missing session is a final answer, not a hiccup. Treating it as a
+        // failed poll meant five retries and then "Lost connection to the
+        // search. It may still be running" -- which is misleading for a
+        // session that does not exist, and made the user wait ten seconds to
+        // be told the wrong thing.
+        if (response.status === 404) {
+          setError('That search could not be found. It may have expired — start a new one.');
+          setLoading(false);
+          return;
+        }
+
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const data: SearchSession = await response.json();

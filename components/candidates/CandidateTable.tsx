@@ -156,6 +156,19 @@ export default function CandidateTable({
                             {candidate.reasoningSummary ||
                               'No AI narrative available for this candidate.'}
                           </p>
+                          {/*
+                            Only the top handful of candidates reach AI review;
+                            on a live run 118 of 137 carried no narrative at all
+                            and this panel was effectively blank for them. Every
+                            candidate does carry relevanceReason -- the stated
+                            grounds for the ranking, already computed and stored
+                            -- which was never shown anywhere.
+                          */}
+                          {candidate.relevanceReason && (
+                            <p className="mt-2 text-sm leading-relaxed text-alphanom-muted">
+                              {candidate.relevanceReason}
+                            </p>
+                          )}
                           <div className="mt-3 flex flex-wrap gap-4 text-xs text-alphanom-muted">
                             <span>
                               Profile signals{' '}

@@ -33,8 +33,15 @@ export default function CandidateResults({ session }: { session: SearchSession }
   };
 
   const toggleSelectAll = () => {
-    if (selectedCandidates.size === sortedCandidates.length) setSelectedCandidates(new Set());
-    else setSelectedCandidates(new Set(sortedCandidates.map((c) => c.id)));
+    // Acts on the rows currently on screen only. Comparing the whole set
+    // against the visible count went wrong as soon as a filter hid a
+    // selected candidate: the box read unchecked with everything visible
+    // ticked, and clearing it wiped picks the recruiter could not see.
+    const next = new Set(selectedCandidates);
+    const allVisibleSelected =
+      sortedCandidates.length > 0 && sortedCandidates.every((c) => next.has(c.id));
+    sortedCandidates.forEach((c) => (allVisibleSelected ? next.delete(c.id) : next.add(c.id)));
+    setSelectedCandidates(next);
   };
 
   const toggleSelectByStrength = (strength: string) => {
@@ -46,7 +53,14 @@ export default function CandidateResults({ session }: { session: SearchSession }
   };
 
   const selectedCandidatesList = sortedCandidates.filter((c) => selectedCandidates.has(c.id));
-  const topScore = session.candidates.length > 0 ? Math.round(session.candidates[0].finalScore) : 0;
+  // The highest score actually shown. This read candidates[0], which is the
+  // order the pipeline stored (relevance first); the table re-sorts by
+  // finalScore, so the banner named one candidate while the list opened with
+  // another -- "top match 75" above a first row scoring 98.
+  const topScore =
+    session.candidates.length > 0
+      ? Math.round(Math.max(...session.candidates.map((c) => c.finalScore)))
+      : 0;
 
   const stats = [
     { key: 'excellent', label: 'Excellent', value: excellentMatches },
@@ -159,7 +173,8 @@ export default function CandidateResults({ session }: { session: SearchSession }
             <input
               type="checkbox"
               checked={
-                selectedCandidates.size === sortedCandidates.length && sortedCandidates.length > 0
+                selectedCandidatesList.length === sortedCandidates.length &&
+                sortedCandidates.length > 0
               }
               onChange={toggleSelectAll}
               className="h-4 w-4 rounded border-alphanom-line accent-alphanom-teal"
@@ -181,8 +196,10 @@ export default function CandidateResults({ session }: { session: SearchSession }
           )}
 
           <span className="ml-auto text-sm text-alphanom-muted">
-            <strong className="font-jakarta text-alphanom-navy">{selectedCandidates.size}</strong> of{' '}
-            {sortedCandidates.length} selected
+            <strong className="font-jakarta text-alphanom-navy">
+              {selectedCandidatesList.length}
+            </strong>{' '}
+            of {sortedCandidates.length} selected
           </span>
         </div>
 
