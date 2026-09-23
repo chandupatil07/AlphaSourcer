@@ -51,3 +51,11 @@ jobs:
         # candidates. A change that silently alters who is kept shows up as a
         # different number here.
         run: npx tsx eval/prove.ts eval/fixtures/run1-before-fixes.json
+
+      - name: Skill-score distribution
+        # The must-have skill score is 35% of the Technology profile and once
+        # returned only two values, because "checkable" was computed with the
+        # same predicate as "found". Nothing in tsc or the build could see it.
+        # This prints every value the score produces on a recorded run, so the
+        # collapse is visible again if it ever comes back.
+        run: npx tsx eval/skills.ts eval/fixtures/run4-new-code.json

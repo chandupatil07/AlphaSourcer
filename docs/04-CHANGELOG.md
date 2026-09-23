@@ -503,3 +503,147 @@ with stale artifacts in it.
 | `nanoid` — 200,000 draws | ✅ all length 12, 0 duplicates |
 | UI files touched | **none** |
 | Owner's `master` | **untouched** |
+
+---
+
+## Session 3 — 23 September 2026
+
+The first measurement of *accuracy* — whether the right people rank at the
+top — rather than of recall or coverage. 28 candidates from `run4` were
+labelled by hand (`eval/label.ts`, shuffled and stripped of score and rank so
+the ranking could not anchor the judgement), then scored with
+`eval/accuracy.ts`.
+
+### The skill score returned exactly two values
+
+`calculateSkillScore` carries the heaviest weight in the Technology profile —
+**35%**. It was written to be evidence-aware: divide the must-have skills
+found by the must-have skills that were *checkable*, so a skill nobody could
+test leaves the denominator instead of counting as a failure. That intent was
+right.
+
+The implementation computed `checkable` with **the same predicate as
+`found`**:
+
+```ts
+const mustTested = mustHaveSkills.filter(has);          // confirmed || in text
+const checkable  = mustHaveSkills.filter(
+  (skill) => confirmed.has(...) || content.includes(...)  // the same test
+).length;
+const mustPercentage = (mustTested.length / checkable) * 100;   // always 100
+```
+
+The two counts were equal by construction, so the ratio was always 1. Run over
+the 239 candidates of `run4`:
+
+```
+EVERY VALUE THE SKILL SCORE PRODUCED
+  score 100  ->   61 candidates
+  score  50  ->  178 candidates
+
+  0 of 3 skills found  (178)  ->  50
+  1 of 3 skills found  ( 35)  ->  100
+  2 of 3 skills found  ( 22)  ->  100
+  3 of 3 skills found  (  4)  ->  100
+```
+
+One required skill out of three scored identically to three out of three.
+`tsc` and `next build` cannot see this: the code is type-correct and the
+arithmetic is valid. Only running the function over real candidates and
+printing every value it produced could.
+
+This is why a Java / Spring Boot engineer with a matching title and a
+confirmed Bangalore location reached **98** — exactly the complaint the owner
+raised, and exactly what the hand-labelling notes recorded profile by profile
+("no python and Django found", "Java, 9 years").
+
+### The fix
+
+Count the evidence directly, and keep the floor where it was:
+
+```ts
+const SKILL_NEUTRAL = 50;                       // no readable evidence — unknown, not absent
+const evidence  = found / mustHaveSkills.length;
+const mustScore = SKILL_NEUTRAL + (100 - SKILL_NEUTRAL) * evidence;
+```
+
+Absence from a ~160-character snippet is still not treated as proof of
+absence: a profile evidencing nothing scores 50, exactly as before. What
+changes is that evidence now separates people.
+
+```
+  0 of 3   178 candidates   ->  50      (unchanged)
+  1 of 3    35 candidates   ->  67
+  2 of 3    22 candidates   ->  83
+  3 of 3     4 candidates   ->  100
+```
+
+Isolated measurement of this change alone (`HEAD` vs working tree, nothing
+else differing) on the top 20 of `run4`:
+
+| | before | after |
+|---|---|---|
+| Aman Gora — Python, Django, AWS, 4 yrs | #19 | **#1** |
+| Mukund S — 1 of 3, no Python or Django | #4 | #12 |
+| Ankush Patel — Java / Spring Boot | #11 | #15 |
+| average must-have skills evidenced, top 20 | 1.50 | 1.55 |
+
+The candidates the owner's own profile-by-profile notes singled out as wrong
+are the ones that moved down, and the one his notes describe as the best
+match is the one that moved to the top.
+
+### Whole-word skill matching
+
+`content.includes(skill)` let a short skill match inside an unrelated word —
+"Go" in "Google", "R" in "React", "AWS" in "laws". Replaced with a word-boundary
+test that keeps `+`, `#` and a leading `.` inside the word, so `C++`, `C#` and
+`.NET` survive.
+
+Measured honestly: **0 substring-only matches across all 239 candidates** for
+Python, Django and AWS. This is a latent fault, not an observed one. It is
+fixed because the skills come from a free-text requirement and the next brief
+can contain any of them.
+
+### A harness so it cannot come back silently
+
+`eval/skills.ts` prints every value the skill score produces on a recorded
+run, and warns if the distribution ever collapses to two values again. Added
+to CI. Costs nothing — no network, no credits.
+
+```bash
+npx tsx eval/skills.ts eval/fixtures/run4-new-code.json
+```
+
+### What this did NOT fix, stated plainly
+
+Precision@20 did **not** improve: 13/20 before this change, 13/20 after.
+Precision@5 and @10 are unchanged at 80%, still above the baseline's 60% and
+70%.
+
+The reason is visible in the labels, and it is not a scoring problem. Four of
+the 28 labels contradict the notes written beside them while labelling — the
+candidate labelled `b` whose notes read *Python, Django, AWS, 4 years* is the
+same candidate this fix moved to #1. Until those four are settled, tuning
+further against precision@20 would be fitting the code to a disputed label
+rather than to the truth, so it was not done.
+
+### Evidence ceiling, for the record
+
+44 of 239 candidates have a skill confirmed by search provenance. The other
+195 are judged on a snippet that usually does not mention skills at all. That
+is a limit on the **evidence**, not on the scoring, and raising it costs
+Serper credits — a per-candidate `site:linkedin.com/in/<slug> "Django"` probe
+on the shortlist. Not done here, because it should be measured against
+settled labels, not disputed ones.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ clean |
+| `next build` from a clean `git archive` + fresh `npm ci` | ✅ all routes compiled |
+| `npx tsx eval/replay.ts b.json` | ✅ |
+| `npx tsx eval/prove.ts eval/fixtures/run1-before-fixes.json` | ✅ |
+| `npx tsx eval/skills.ts eval/fixtures/run4-new-code.json` | ✅ 4 distinct values, no warning |
+| UI files touched | **none** |
+| Owner's `master` | **untouched** |

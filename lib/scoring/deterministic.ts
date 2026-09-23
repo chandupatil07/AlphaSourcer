@@ -159,42 +159,67 @@ function calculateTitleScore(
  *
  * `confirmedSkills` carries the skills proven present by the queries that
  * returned this profile: Google matched them against the whole indexed page.
- * Skills neither confirmed nor visible in the text are untested, and are left
- * out of the denominator instead of counted as failures.
+ *
+ * The previous version tried to express "unknown is not absent" by dividing
+ * the skills found by the skills that were "checkable" -- but it computed
+ * "checkable" with the same predicate as "found", so the two counts were equal
+ * by construction and the ratio was always 1. Measured on the 239-candidate
+ * run4 pool, the whole 35% weight returned exactly two values: 50 when nothing
+ * was found, 100 otherwise. One skill out of three scored the same as three
+ * out of three, which is why a Java/Spring engineer with the right title and a
+ * confirmed Bangalore location reached 98.
+ *
+ * So the evidence is counted directly instead. NEUTRAL is what a profile with
+ * no readable skill evidence scores -- unchanged from before, because absence
+ * from a 160-character snippet is still not proof of absence. Every skill
+ * actually evidenced lifts the score above that floor. Nobody lands below
+ * where the old code put them; the change only separates the candidates it
+ * used to award full marks on partial evidence.
  */
-function calculateSkillScore(
+const SKILL_NEUTRAL = 50;
+
+/**
+ * Whole-word skill matching. A plain `includes` lets a one- or two-letter
+ * skill match inside an unrelated word -- "Go" inside "Google", "R" inside
+ * "React", "AWS" inside "laws". None of those occur in the recorded runs
+ * (measured: 0 substring-only matches across 239 candidates for Python,
+ * Django and AWS), so this is a latent fault, not an observed one -- but the
+ * skills come from a free-text requirement, so the next brief can contain any
+ * of them. `+`, `#` and a leading `.` stay inside the word so "C++", "C#" and
+ * ".NET" survive.
+ */
+function skillAppearsIn(text: string, skill: string): boolean {
+  const term = skill.trim();
+  if (!term) return false;
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^a-z0-9+#.])${escaped}([^a-z0-9+#]|$)`, 'i').test(text);
+}
+
+export function calculateSkillScore(
   currentTitle: string | null,
   snippet: string,
   mustHaveSkills: string[],
   goodToHaveSkills: string[],
   confirmedSkills: string[] = []
 ): number {
-  const content = `${currentTitle || ''} ${snippet}`.toLowerCase();
-  const confirmed = new Set(confirmedSkills.map((s) => s.toLowerCase()));
+  const content = `${currentTitle || ''} ${snippet}`;
+  const confirmed = new Set(confirmedSkills.map((s) => s.trim().toLowerCase()));
 
-  const has = (skill: string) => {
-    const s = skill.toLowerCase();
-    return confirmed.has(s) || content.includes(s);
-  };
-
-  const mustTested = mustHaveSkills.filter(has);
+  const has = (skill: string) =>
+    confirmed.has(skill.trim().toLowerCase()) || skillAppearsIn(content, skill);
 
   // Good-to-have skills are a bonus only; their absence is never evidence.
   const goodMatches = goodToHaveSkills.filter(has).length;
   const goodBonus =
     goodToHaveSkills.length > 0 ? (goodMatches / goodToHaveSkills.length) * 20 : 0;
 
-  if (mustHaveSkills.length === 0) return Math.min(100, 50 + goodBonus);
+  if (mustHaveSkills.length === 0) return Math.min(100, SKILL_NEUTRAL + goodBonus);
 
-  // Only skills we had some way of checking belong in the denominator. When
-  // nothing was checkable the honest answer is neutral, not zero.
-  const checkable = mustHaveSkills.filter(
-    (skill) => confirmed.has(skill.toLowerCase()) || content.includes(skill.toLowerCase())
-  ).length;
-  if (checkable === 0) return Math.min(100, 50 + goodBonus);
+  const found = mustHaveSkills.filter(has).length;
+  const evidence = found / mustHaveSkills.length;
+  const mustScore = SKILL_NEUTRAL + (100 - SKILL_NEUTRAL) * evidence;
 
-  const mustPercentage = (mustTested.length / checkable) * 100;
-  return Math.min(100, mustPercentage + goodBonus);
+  return Math.min(100, mustScore + goodBonus);
 }
 /**
  * Prefers the stated tenure the parser recovered. Only when no number is
