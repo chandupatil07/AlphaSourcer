@@ -391,6 +391,102 @@ already configurable per deployment.
 
 ---
 
+---
+
+## Session 2, part 3 — the last un-audited files
+
+`clarify.ts`, the three Groq modules, `utils.ts`, the analyze route and the
+client polling. Every file in `lib/` and `app/api/` has now been read.
+
+### 13. Session ids could come out one character long
+
+| | |
+|---|---|
+| **File** | `lib/utils.ts` · **Commit** `9330c82` |
+
+```js
+Math.random().toString(36).substr(2, 9)
+```
+
+`toString(36)` drops trailing zeros, so the tail is not always nine
+characters long. Measured over 200,000 draws: **42 came back with seven or
+eight characters**, and the worked case `(0.5).toString(36)` is `"0.i"` — a
+**one-character id**.
+
+This generates **session ids** (`app/api/search/route.ts`). Two searches
+colliding on an id means one person's results are served to another. It also
+seeded candidate and query ids, where a collision silently merges two records.
+
+Now a fixed 12 characters from the platform CSPRNG, with a 32-character
+alphabet so the byte-to-character mapping is a mask rather than a modulo and
+carries no bias. 60 bits. **Verified: 200,000 draws, all length 12, zero
+duplicates.**
+
+Also removed `getMatchStrengthLabel` — unused, and a *fourth* copy of the
+90/75/60 boundaries.
+
+### 14. Text interpolated into a prompt could rewrite the prompt
+
+| | |
+|---|---|
+| **Files** | `lib/groq/parseRequirement.ts`, `lib/groq/evaluateCandidate.ts` · **Commit** `850ba66` |
+
+`String.replace` treats `$&`, `` $` `` and `$'` in the **replacement** as
+substitution patterns even when the search pattern is a plain string:
+
+```
+"Requirement: {requirement}\nRULES: ..."   with   "Salary $' negotiable"
+-> "Requirement: Salary  | RULES: ... negotiable | RULES: ..."
+```
+
+The rules are duplicated and the inserted text is mangled. With `$&` the
+placeholder itself is re-inserted.
+
+It matters most in `evaluateCandidate`, where the interpolated block is built
+from names, headlines and Google snippets — **text this code does not
+control**. One profile containing `$'` would truncate the instructions for
+the whole batch and silently degrade ten evaluations at once, with no error.
+
+Both now use replacer functions, which disable the substitution.
+
+**Stated honestly:** across 644 recorded candidates, **zero** contain any of
+these sequences. This is latent, not a bug anyone has hit — but the input is
+untrusted and the fix costs nothing.
+
+### 15. Deleted the unused LLM query generator
+
+| | |
+|---|---|
+| **File** | `lib/groq/generateQueries.ts` · **Commit** `e52312e` |
+
+No callers. Queries are built deterministically by `buildQueries`, which is
+what makes every query provably carry an accepted title and the requested
+location. Keeping the module was actively misleading, because the README
+still describes the LLM path — so anyone onboarding reads it and builds the
+wrong mental model.
+
+### Read and found clean
+
+`clarify.ts`, `normalizeBrief.ts`, `groq/client.ts`, the analyze route, and
+the client polling loop in `app/search/[id]/page.tsx`. The Groq client in
+particular is well built: model chain, per-request time budget, and
+memoisation of models proven unusable.
+
+---
+
+## One recommendation, not done
+
+A session id that does not exist now returns 404 (correct). The client
+counts it as a connection failure and, after five polls, shows *"Lost
+connection to the search. It may still be running — refresh to check."* For
+a genuinely missing session that message is misleading — it should say so
+immediately.
+
+Not changed, because it lives in `app/` and this work carries a guarantee
+that **no UI file was touched**. Worth doing as a separate, visible change.
+
+---
+
 ## Final verification
 
 Run from a clean `git archive` of the committed tree with a fresh `npm ci`,
@@ -401,8 +497,9 @@ with stale artifacts in it.
 |---|---|
 | `npx tsc --noEmit` | ✅ clean |
 | `npm run build` | ✅ all routes compiled |
-| `npx tsx eval/replay.ts b.json` | ✅ |
-| `npx tsx eval/prove.ts eval/fixtures/run1-before-fixes.json` | ✅ |
+| `npx tsx eval/replay.ts b.json` | ✅ CI step 1 |
+| `npx tsx eval/prove.ts eval/fixtures/run1-before-fixes.json` | ✅ CI step 2 |
 | Excel export generated from a real session | ✅ 3 sheets, 306 rows |
+| `nanoid` — 200,000 draws | ✅ all length 12, 0 duplicates |
 | UI files touched | **none** |
 | Owner's `master` | **untouched** |
