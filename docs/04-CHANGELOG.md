@@ -998,3 +998,171 @@ next run. It will be recorded when it is measured, not before.
 | Scores on recorded runs (no probes) | **identical to before** |
 | Queries still naming the city | 22 / 22 |
 | Owner's `master` | **untouched** |
+
+---
+
+## Session 3, part 5 — the probes ran, and what they exposed next
+
+`run5` is a live search, same brief as `run4`, recorded as
+`eval/fixtures/run5-skill-verification.json`.
+
+```
+[search] 22 queries x 2 pages = ~44 credits
+[verify] 34 probes across 21 candidates (caps: 25 candidates, 60 probes)
+[verify] 13 confirmed, 21 not on the profile, 0 could not be checked
+78 Serper credits total · 8,110 Groq tokens · no fallback model needed
+```
+
+### Measured: the evidence problem moved
+
+Shortlists differ in size (137 vs 122), so these are normalised.
+
+| | run4 (before) | run5 (after) |
+|---|---|---|
+| Python | 20/137 (15%) | **31/122 (25%)** |
+| Django | 6/137 (**4%**) | **15/122 (12%)** |
+| AWS | 25/137 (18%) | **29/122 (24%)** |
+| **all three at once** | 2/137 (1%) | **10/122 (8%)** |
+
+Proven by a search that demanded the term — the strongest evidence:
+
+```
+Python  12 -> 23       Django  4 -> 14       AWS  12 -> 23
+```
+
+Most of that came from the **four combination queries**, not the per-candidate
+probes: one query naming several skills confirms all of them for every profile
+it returns, for one credit. The per-candidate probes added 13 confirmations —
+and 21 **verified absences**, which is information that did not exist in any
+previous run at any price.
+
+### Measured: what verified-absence did to the order
+
+Isolated on `run5`, scoring with `absentSkills` against scoring that ignores
+them:
+
+```
+15 demoted, 2 pushed out of the top 20
+
+ #22 -> #56  Charles Sebastian    checked: no Python, no Django
+ #20 -> #54  kartik dubey         checked: no AWS, no Django
+ #21 -> #55  Swathy Jayasankar    checked: no Django, no AWS
+```
+
+Charles Sebastian is the candidate `eval/accuracy.ts` reported on `run4` under
+"BAD CANDIDATES THE CURRENT SCORING RANKS HIGH", at #10 with a score of 98. He
+is now checked and demoted on evidence rather than on a hunch.
+
+### A caveat that matters
+
+`run5` is **not** a clean A/B against `run4`. The model inferred a different
+set of employers (Infosys, Wipro, TCS, Amazon, Microsoft, Google — against
+`run4`'s Flipkart, Zomato, Swiggy, Razorpay, CRED), and company-led queries
+are 10 of the 22. Part of the coverage difference is a different candidate
+mix. The within-run facts — 13 confirmed, 21 verified absent, 34 credits — are
+exact; the before/after percentages carry that caveat.
+
+---
+
+## What run5 exposed: 22 of 122 were advertising a different language
+
+Ranked by `finalScore`, which is what the results page shows:
+
+```
+#10  80  strong  Senior Java Backend Engineer
+#11  80  strong  Senior Java Backend Engineer & Tech Lead
+#29  75  strong  Java Backend Engineer
+#30  75  strong  Java Backend Developer
+```
+
+A Python/Django brief, and **22 of 122 kept candidates spent their own
+headline on a rival stack** while mentioning nothing the brief asked for
+anywhere in their text. Two were inside the top 20.
+
+The probes cannot fix this at any sensible price — they reach 25 candidates.
+Reading the headline is free and reaches everyone.
+
+### `lib/scoring/stacks.ts` — a fourth kind of evidence
+
+```
+1.0   found      confirmed by a query, or visible in the text
+0.0   absent     a probe named this profile and this term, got nothing
+0.25  competing  the HEADLINE names a rival stack, the wanted one is nowhere
+0.5   untested   nothing either way
+```
+
+Three guards, because this is the rule most able to misfire:
+
+1. **Language stacks only.** A Java engineer plainly can know AWS, so nothing
+   outside the requested language stack is touched. Only Python and Django
+   were affected here; AWS was not.
+2. **The negative half reads the headline; the suppressing half reads
+   everything.** A headline is a deliberate self-description; a snippet is a
+   truncated excerpt. Without this split the rule would smuggle back the exact
+   inference the rest of this codebase refuses — that a snippet not mentioning
+   Python is evidence of no Python. Extra text can only ever *cancel* the
+   penalty, never create one.
+
+   The first version tested both halves against title + snippet and demoted
+   six candidates whose headline said nothing about any stack. Tightening it
+   to the headline removed every one of those.
+3. **No language stack in the brief, no rule.** Verified: `b.json`, a brief
+   with no must-have skills, fires on **0 of 103**.
+
+Audited across every recorded run — `run5` 24/194, `run4` 13/239, `run1`
+13/235 — and **every single hit is a Java, Go or Golang headline**. No false
+positives.
+
+### Measured, replaying `finalScore` exactly
+
+Only the deterministic half is recomputed; each candidate keeps the contextual
+score the LLM actually gave it, and the 102 past the review cut keep
+`contextual = deterministic`, as the pipeline does.
+
+| self-declared rival stack | before | after |
+|---|---|---|
+| in the top 10 | 1 | **0** |
+| in the top 20 | 2 | **0** |
+| in the top 30 | 4 | **2** |
+
+```
+#10 -> #28   Senior Java Backend Engineer            80 -> 73
+#11 -> #29   Senior Java Backend Engineer & Tech Lead 80 -> 73
+#29 -> #53   Java Backend Engineer                   75 -> 68
+```
+
+18 candidates changed match-strength band — a Java engineer no longer carries
+a "strong" badge on a Python role. Two genuine Python candidates were pulled
+into the top 20 by the space that freed.
+
+`eval/accuracy.ts` on `run4` is **unchanged** at 100% / 90% / 70%: none of the
+28 labelled candidates advertise a rival stack, so this neither helped nor
+hurt the one measurement with human labels behind it. Stated because it is the
+number that matters and it did not move.
+
+### One instrumentation bug fixed
+
+The live run printed:
+
+```
+[skills] 7 probe queries; 49/194 candidates have at least one skill confirmed
+[skills] after verification: 31/122 candidates have at least one skill confirmed
+```
+
+which reads as verification having *lost* 18 confirmations. It had not — the
+first line counts every unique candidate, the second only the kept shortlist.
+Two different populations, printed as if they were one. Both lines now count
+the same pool and the second states the before-figure alongside.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ clean |
+| `next build` from a clean tree, `.next` deleted | ✅ all routes compiled |
+| `eval/replay.ts` · `eval/prove.ts` · `eval/skills.ts` · `eval/accuracy.ts` | ✅ |
+| `eval/accuracy.ts` on the labelled run | **unchanged** 100 / 90 / 70 |
+| Competing-stack false positives across 4 recorded runs | **0** |
+| Brief with no language stack (`b.json`) | fires on **0 of 103** |
+| UI files touched | **none** |
+| Owner's `master` | **untouched** |

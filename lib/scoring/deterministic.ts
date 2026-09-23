@@ -1,6 +1,7 @@
 import { Candidate, SearchBrief } from '@/types/index';
 import { SCORING_PROFILES } from '@/config/scoring';
 import { CITY_ALIASES, countryOfPlace } from '@/lib/geo/places';
+import { advertisesCompetingStack, isInWantedStack } from '@/lib/scoring/stacks';
 
 export function calculateDeterministicScore(
   candidate: {
@@ -222,20 +223,30 @@ export function calculateSkillScore(
 
   if (mustHaveSkills.length === 0) return Math.min(100, SKILL_NEUTRAL + goodBonus);
 
-  // Three kinds of evidence, scored on one scale:
+  // Four kinds of evidence, scored on one scale:
   //
-  //   1.0  found      -- confirmed by a query, or visible in the text
-  //   0.0  absent     -- a probe aimed at THIS profile asked for the term and
-  //                      Google returned nothing. Real negative evidence, and
-  //                      the only thing that can pull a candidate below the
-  //                      neutral floor.
-  //   0.5  untested   -- nothing either way. Exactly the old neutral, so a run
-  //                      with no probes scores identically to before.
+  //   1.0   found      -- confirmed by a query, or visible in the text
+  //   0.0   absent     -- a probe aimed at THIS profile asked for the term and
+  //                       Google returned nothing. The strongest negative.
+  //   0.25  competing  -- untested, but the HEADLINE advertises a rival
+  //                       language stack and the wanted one appears nowhere.
+  //                       Weaker than a probe, because it reads a headline
+  //                       rather than querying the page -- but it is not
+  //                       silence either, and unlike a probe it costs nothing
+  //                       and applies to every candidate.
+  //   0.5   untested   -- nothing either way. Exactly the old neutral.
   const UNTESTED = SKILL_NEUTRAL / 100;
+  const COMPETING = UNTESTED / 2;
+
+  // Only the language stack is affected: a Java engineer can plainly know AWS,
+  // Kubernetes or Postgres, so nothing outside the stack is touched.
+  const competing = advertisesCompetingStack(currentTitle ?? '', content, mustHaveSkills);
+
   let total = 0;
   for (const skill of mustHaveSkills) {
     if (has(skill)) total += 1;
     else if (absent.has(skill.trim().toLowerCase())) total += 0;
+    else if (competing && isInWantedStack(skill, mustHaveSkills)) total += COMPETING;
     else total += UNTESTED;
   }
 

@@ -229,6 +229,10 @@ export async function processSearchPipeline(
     // on the people who can still reach a recruiter rather than on all 239.
     // Scoring again afterwards is what makes it matter -- a skill settled here
     // changes the order, and the order is what the recruiter sees.
+    const beforeVerification = deduplicatedCandidates.filter(
+      (c) => (c.confirmedSkills?.length ?? 0) > 0
+    ).length;
+
     const verification = await verifyCandidateSkills(
       ranked.map((r) => r.candidate),
       searchBrief,
@@ -236,12 +240,17 @@ export async function processSearchPipeline(
     );
     if (verification.probes > 0) {
       ranked = scoreAll();
-      const withConfirmed = deduplicatedCandidates.filter(
-        (c) => (c.confirmedSkills?.length ?? 0) > 0
-      ).length;
+      // Counted over the SAME pool as the line below, on purpose. This first
+      // reported against the kept shortlist while stage 5a reported against
+      // every unique candidate, so the live run printed "49/194" and then
+      // "31/122" -- which reads as verification having LOST confirmations
+      // when the two numbers simply count different people.
+      const confirmedIn = (list: Candidate[]) =>
+        list.filter((c) => (c.confirmedSkills?.length ?? 0) > 0).length;
       console.log(
-        `[skills] after verification: ${withConfirmed}/${deduplicatedCandidates.length} ` +
-          `candidates have at least one skill confirmed`
+        `[skills] after verification: ${confirmedIn(deduplicatedCandidates)}/${deduplicatedCandidates.length} ` +
+          `of the shortlist have at least one skill confirmed ` +
+          `(it was ${beforeVerification}/${deduplicatedCandidates.length} before the probes)`
       );
     }
     session.skillVerification = verification;
