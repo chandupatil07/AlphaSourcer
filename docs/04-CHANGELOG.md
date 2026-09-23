@@ -767,3 +767,99 @@ change results most, and a disabled search button while the box is empty.
 | Coverage states sum to the list size | ✅ 137 / 137 on every row |
 | Scoring, ranking or filtering changed | **none** — this part is interface only |
 | Owner's `master` | **untouched** |
+
+---
+
+## Session 3, part 3 — the location rule, settled
+
+The owner's answer to the open question, in his words:
+
+> *"if it is mentioned there from India then only from India; if not, then you
+> can return any. If there is Bengaluru then you can return, because Bengaluru
+> also comes in India."*
+
+**The country is the boundary. The city is a preference.**
+
+### The four disputed labels are now resolved
+
+Every accuracy number so far was measured against an answer key that
+contradicted itself, so it was measuring the key as much as the code. Applying
+the rule above to all 28 labels:
+
+| Candidate | was | now | why |
+|---|---|---|---|
+| Aman Gora | `b` | **`g`** | Bengaluru, all three skills — in India |
+| Sai Pranay Ganji | `g` | **`b`** | Toronto — outside India |
+| Abhilash G. Palakshappa | `g` | **`b`** | US in the profile — outside India |
+| Manibala Sinha | `b` | `b` | Canada — already correct |
+
+Audited across all 28, not only the four: **no candidate outside India is
+labelled `g`** and none inside India is labelled `b` for location reasons.
+
+### The first accuracy number measured against a consistent key
+
+```
+              BASELINE (master)     CURRENT
+top 5         4/5   (80%)           5/5   (100%)    better
+top 10        8/10  (80%)           9/10  ( 90%)    better
+top 20        13/20 (65%)           14/20 ( 70%)    better
+
+good candidates rank: best 1, median 11 (was 16), worst 64
+```
+
+Every k improves. The previous "top 20 got WORSE" reading was the disputed
+key, not the code — the candidate the fix moved to #1 was the one labelled
+`b` despite notes reading *Python, Django, AWS, 4 years*.
+
+### The gate was enforcing the city, not the country
+
+`locationMismatch` demanded the city itself. On run4 that dropped **13 of 239
+candidates who were in India** — three in Chennai, and one whose location
+reads literally **"India"**. Those were not bad matches; the gate was treating
+a preference as a requirement.
+
+It also carried its **own 24-city `CITY_COUNTRY` map**, a fourth copy of data
+the `lib/geo/places.ts` consolidation was supposed to have ended — so
+Coimbatore, Vellore, Mysore and roughly 270 other cities were unknown to the
+gate while the scorer knew them.
+
+Both fixed: the gate now reads `lib/geo/places.ts`, resolves the brief to a
+set of **countries**, and rejects only a location that positively resolves to
+a different one.
+
+Isolated measurement of this change alone, `HEAD` vs working tree:
+
+| | run4 (239) | run1 (235) |
+|---|---|---|
+| kept now, dropped before | **16** | **23** |
+| **dropped now, kept before** | **0** | **0** |
+| still dropped (all US/Canada) | 6 | 3 |
+
+**Nothing is newly excluded.** The change only relaxes, and only inside the
+requested country.
+
+On the 28 labelled candidates it rescues **1 good** (Siddhant Nagelia,
+Vellore) and still excludes **1 bad** (Sai Pranay Ganji, Toronto) — the
+correct direction on both sides, on a small sample.
+
+Ranking is untouched: `calculateLocationScore` still gives 100 for the city
+itself, 45 for the right country, 10 for a confirmed elsewhere. A Pune
+candidate now appears, below the Bangalore locals — which is what a recruiter
+wants to see, not a silent deletion.
+
+One side effect, stated because it is real: a profile whose location text the
+parser cannot read (one recorded case reads `Mar 2021`) is no longer dropped.
+The old code rejected it for failing to match "Bangalore", which was rejecting
+on a parser failure rather than on evidence. Unknown is not elsewhere.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ clean |
+| `next build` from a clean tree, `.next` deleted | ✅ all routes compiled |
+| `eval/replay.ts`, `eval/prove.ts`, `eval/skills.ts` | ✅ |
+| `eval/accuracy.ts` on the corrected key | ✅ better at 5, 10 and 20 |
+| Candidates newly excluded by the gate change | **0** |
+| UI files touched | **none** |
+| Owner's `master` | **untouched** |

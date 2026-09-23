@@ -1,5 +1,6 @@
 import { SearchBrief } from '@/types/index';
 import { detectJobAdvert } from '@/lib/candidates/jobAdvert';
+import { CITY_ALIASES, countryOfPlace } from '@/lib/geo/places';
 
 export type RelevanceTier = 'core' | 'adjacent' | 'skill' | 'excluded';
 
@@ -102,51 +103,86 @@ function containsAllTokens(titleSet: Set<string>, required: Set<string>): boolea
   return true;
 }
 
-// Cities that imply their country, so "Bangalore" in a brief still accepts a
-// profile listed as "Bengaluru, Karnataka, India".
-const CITY_COUNTRY: Record<string, string> = {
-  bangalore: 'india', bengaluru: 'india', mumbai: 'india', bombay: 'india',
-  delhi: 'india', gurgaon: 'india', gurugram: 'india', noida: 'india',
-  hyderabad: 'india', chennai: 'india', pune: 'india', kolkata: 'india',
-  ahmedabad: 'india', jaipur: 'india', kochi: 'india', indore: 'india',
-  london: 'united kingdom', manchester: 'united kingdom',
-  singapore: 'singapore', dubai: 'united arab emirates',
-  berlin: 'germany', munich: 'germany', paris: 'france',
-  toronto: 'canada', vancouver: 'canada', sydney: 'australia', melbourne: 'australia',
-};
-
-const CITY_ALIASES: Record<string, string[]> = {
-  bangalore: ['bengaluru'], bengaluru: ['bangalore'],
-  mumbai: ['bombay'], bombay: ['mumbai'],
-  gurgaon: ['gurugram'], gurugram: ['gurgaon'],
-};
+/**
+ * The location rule, stated once: **the country is the boundary, the city is
+ * a preference.**
+ *
+ * A brief naming Bangalore is a brief naming India. Someone in Pune or
+ * Hyderabad is in the market the recruiter asked for and belongs on the list,
+ * ranked below a Bangalore local -- which is exactly what
+ * `calculateLocationScore` already does (100 for the city itself, 45 for the
+ * right country, 10 for a confirmed elsewhere).
+ *
+ * Before this, the gate demanded the city, and dropped 13 of 239 candidates
+ * in run4 who were in India -- including a profile whose location reads
+ * literally "India", and three in Chennai. Those were not bad matches; they
+ * were the gate confusing a preference for a requirement.
+ *
+ * Out of country is still a hard no. An unreadable location is still never a
+ * mismatch: unknown is not elsewhere.
+ */
 
 /**
- * Accepted location terms, and whether the brief is city-specific. Naming a
- * city means that city — a brief for Bangalore should not return Chennai.
+ * The place names inside a location string, largest useful pieces first.
+ * "Bengaluru, Karnataka, India" yields the three segments, then the
+ * individual words, so "Greater Toronto Area" still resolves through
+ * "toronto".
  */
-function acceptedLocations(brief: SearchBrief): { terms: Set<string>; cityLevel: boolean } {
-  const terms = new Set<string>();
-  let cityLevel = false;
+function placeParts(raw: string): string[] {
+  const parts: string[] = [];
+  const push = (value: string) => {
+    const clean = value.trim().toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (clean) parts.push(clean);
+  };
 
-  for (const raw of [...brief.locations, ...brief.locationVariants]) {
-    const loc = normalize(raw);
-    if (!loc) continue;
-    terms.add(loc);
+  push(raw);
+  for (const segment of raw.split(/[,|/·–—]/)) {
+    push(segment);
+    for (const word of segment.trim().split(/\s+/)) push(word);
+  }
+  return parts;
+}
 
-    if (CITY_COUNTRY[loc]) {
-      // A recognised city: demand the city itself, plus its known aliases.
-      cityLevel = true;
-      for (const alias of CITY_ALIASES[loc] ?? []) terms.add(alias);
-    } else {
-      // Treat as a region/country: also accept cities known to sit inside it.
-      for (const [city, country] of Object.entries(CITY_COUNTRY)) {
-        if (country === loc) terms.add(city);
+/** Every country the brief will accept. Empty means none could be read. */
+function acceptedCountries(brief: SearchBrief): Set<string> {
+  const countries = new Set<string>();
+  for (const raw of [...brief.locations, ...(brief.locationVariants ?? [])]) {
+    if (!raw?.trim()) continue;
+    for (const part of placeParts(raw)) {
+      const country = countryOfPlace(part);
+      if (country) {
+        countries.add(country);
+        break;
       }
     }
   }
+  return countries;
+}
 
-  return { terms, cityLevel };
+/** The country a profile's location sits in, or null when unreadable. */
+function countryOfLocationText(text: string): string | null {
+  for (const part of placeParts(text)) {
+    const country = countryOfPlace(part);
+    if (country) return country;
+  }
+  return null;
+}
+
+/**
+ * Fallback for a brief naming somewhere the dataset does not recognise -- a
+ * neighbourhood, a corridor, a country not yet in `places.ts`. Rather than
+ * accept the whole world, it keeps the older behaviour of demanding the term
+ * itself, including the city aliases.
+ */
+function acceptedTerms(brief: SearchBrief): Set<string> {
+  const terms = new Set<string>();
+  for (const raw of [...brief.locations, ...(brief.locationVariants ?? [])]) {
+    const loc = normalize(raw);
+    if (!loc) continue;
+    terms.add(loc);
+    for (const alias of CITY_ALIASES[loc] ?? []) terms.add(alias);
+  }
+  return terms;
 }
 
 /**
@@ -162,31 +198,32 @@ function matchesTerm(haystack: string, term: string): boolean {
 }
 
 /**
- * Only rejects a location we can positively identify as elsewhere. An unknown
- * or unparseable location is never treated as a mismatch.
+ * Only rejects a location we can positively identify as being in another
+ * country. An unknown or unparseable location is never treated as a mismatch.
  */
 export function locationMismatch(
   candidateLocation: string | null | undefined,
   brief: SearchBrief
 ): boolean {
-  const { terms, cityLevel } = acceptedLocations(brief);
-  if (terms.size === 0) return false;
-
-  const loc = normalize(candidateLocation || '');
+  const loc = (candidateLocation ?? '').trim();
   if (!loc) return false;
 
+  const countries = acceptedCountries(brief);
+
+  if (countries.size > 0) {
+    const country = countryOfLocationText(loc);
+    if (!country) return false;
+    return !countries.has(country);
+  }
+
+  // The brief named somewhere, but nothing in it resolved to a country.
+  const terms = acceptedTerms(brief);
+  if (terms.size === 0) return false;
+
+  const normalized = normalize(loc);
   for (const term of terms) {
-    if (matchesTerm(loc, term)) return false;
+    if (matchesTerm(normalized, term)) return false;
   }
-
-  // Country-level briefs still accept a profile that names only its city.
-  if (!cityLevel) {
-    for (const part of loc.split(' ')) {
-      const country = CITY_COUNTRY[part];
-      if (country && terms.has(country)) return false;
-    }
-  }
-
   return true;
 }
 
