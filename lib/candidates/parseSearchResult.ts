@@ -95,9 +95,44 @@ const BARE_CITY_PATTERN = new RegExp(
   'i'
 );
 
+/** The same alternation, global, for scanning every city in a segment. */
+const BARE_CITY_PATTERN_ALL = new RegExp(BARE_CITY_PATTERN.source, 'gi');
+
 const trimTail = (value: string) => value.replace(/[.\s]+$/, '').trim();
 
 const titleCase = (value: string) => value.replace(/\b\w/g, (c) => c.toUpperCase());
+
+/**
+ * Trims a segment back to where the place name actually starts.
+ *
+ * Google does not always put a comma before the city, so the comma run picks
+ * up whatever prose precedes it in the same segment. Seen on a live
+ * production run: "IIT Roorkee '21 Bengaluru, Karnataka" and "Building
+ * Scalable Backend Systems Bengaluru, Karnataka" were both being stored as
+ * the candidate's location -- shown to the recruiter, written to the export,
+ * and matched against the brief.
+ *
+ * Only the leading text is removed, and only when a known city is found
+ * inside the segment, so an ordinary "Bengaluru" segment is untouched.
+ */
+function trimToCity(segment: string): string {
+  // The LAST city in the segment, not the first. A headline often names an
+  // institution's city before the candidate's own -- "IIT Roorkee '21
+  // Bengaluru, Karnataka" -- and Roorkee is itself a real city, so taking the
+  // first match moved the candidate to the wrong one.
+  BARE_CITY_PATTERN_ALL.lastIndex = 0;
+  let last: RegExpExecArray | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = BARE_CITY_PATTERN_ALL.exec(segment)) !== null) {
+    last = match;
+    if (match.index === BARE_CITY_PATTERN_ALL.lastIndex) BARE_CITY_PATTERN_ALL.lastIndex++;
+  }
+  if (!last) return segment;
+
+  // match[1] is the separator the pattern consumed before the name.
+  const at = last.index + (last[1] ? last[1].length : 0);
+  return at > 0 ? segment.slice(at).trim() : segment;
+}
 
 /**
  * Recovers a location from snippet prose.
@@ -138,7 +173,11 @@ function locationFromSnippet(snippet: string): string | null {
       // Reach back far enough to carry the city with its anchor:
       // "Bengaluru, Karnataka, India" anchors on the country two segments on.
       const from = isCountry ? Math.max(0, i - 2) : isRegion ? Math.max(0, i - 1) : i;
-      const value = segments.slice(from, i + 1).join(', ');
+      const parts = segments.slice(from, i + 1);
+      // The first segment may carry prose ahead of the place name, because
+      // Google does not always put a comma before the city.
+      parts[0] = trimToCity(parts[0]);
+      const value = parts.join(', ');
       if (value.length <= 60) return value;
     }
   }
