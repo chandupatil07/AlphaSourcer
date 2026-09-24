@@ -1231,3 +1231,101 @@ the fresh `run5` labelling would be fitting the code to rows it has already
 seen. **Measured, recorded, not touched.**
 
 No code changed in this entry.
+
+---
+
+## Session 3, part 7 — the generalisation check, and what it found
+
+Every number before this rested on **28 labels from one recorded run**. Tuning
+against them and then quoting them proves nothing. `run5` is a **fresh search**
+hand-labelled fresh — 42 rows, 32 `g`, 7 `b`, 3 `?`.
+
+### The result
+
+```
+              BASELINE (master)     CURRENT
+top 5         4/5   (80%)           5/5   (100%)    better
+top 10        9/10  (90%)           8/10  ( 80%)    WORSE
+top 20        17/20 (85%)           18/20 ( 90%)    better
+```
+
+**The work generalises.** On a search it had never seen, with labels written
+after the code was frozen, the current scoring is better at 5 and at 20. It is
+worse at 10, by exactly one candidate, and that candidate is worth
+understanding rather than explaining away.
+
+### The one regression, named
+
+Current scoring moved four candidates into the top 10 — **three good**
+(Shruthi Sagar CR, Abhinit Rai, Balakrishnan Subramaniyam) and one the human
+rejected. Four good ones dropped out but stayed good elsewhere, so the net is
+−1.
+
+Both candidates in the top 10 the human called bad look like this:
+
+```
+  Ashwin Pranesh   95    confirmed: Python, Django, AWS    location: none    years: not stated
+  Praveen Gouda    91    confirmed: Django, AWS, Python    location: none    years: not stated
+```
+
+**Both have all three required skills proven by search provenance.** On the
+dimension this session spent its work on, the tool is right about them. The
+human's own note on one reads *"all satisfied except experience"*.
+
+So the top-10 regression is not the skill work misfiring. It is a profile that
+states **nothing but its skills** being ranked on skills alone — and the two
+dimensions that would have caught it, experience and location, are exactly the
+two that are unverifiable for most candidates and whose policy is still
+**blocked on the owner**.
+
+### One inconsistent label, and why it does not change the reading
+
+| | | |
+|---|---|---|
+| Joylen Saldanha | 8.5+ years, outside the 4–7 range | labelled **`g`** |
+| Praveen Gouda | *"all satisfied except experience"* | labelled **`b`** |
+
+Same rule, opposite answers. Tested both ways rather than picking one:
+
+```
+  as labelled                       baseline 9/10    current 8/10
+  if Praveen were g, like Joylen    baseline 10/10   current 9/10
+  if Joylen were b, like Praveen    baseline 9/10    current 8/10
+```
+
+Current stays one behind baseline under every reading. **The regression is
+real and cannot be blamed on the label.**
+
+### Sizing the blocked experience decision — a diagnostic, not a change
+
+Part 6 measured that a Senior title with no stated years scores **90**. If that
+fallback were capped:
+
+| cap | top 5 | top 10 | top 20 |
+|---|---|---|---|
+| **90 (today)** | 100% | **80%** | 90% |
+| 80 / 70 / 65 | 100% | 80% | 90% |
+| **60** | 100% | **90%** | 90% |
+| 50 | 100% | 90% | **80%** |
+
+So the whole experience question is worth **about one candidate in the top
+10**, and only at a fairly aggressive cap. An earlier note in this changelog
+called it "the largest remaining defect"; the measurement says it is smaller
+than that, and the record is corrected here rather than quietly left standing.
+
+**Not implemented.** Picking 60 *because* it makes this table look better is
+precisely the overfitting this whole exercise exists to avoid — it would be
+fitting a constant to 39 rows the code has now seen. It stays a number attached
+to the owner's decision.
+
+### Honest scoreboard
+
+| | measured on | result |
+|---|---|---|
+| run4, 28 labels (tuned against) | recorded run | 100% / 90% / 70% |
+| **run5, 39 labels (never seen)** | **fresh search** | **100% / 80% / 90%** |
+
+Two samples, one brief, a few dozen labels each. A signal, not a verdict — but
+it is a signal from data the code did not get to learn from.
+
+No code changed in this entry.
