@@ -1166,3 +1166,68 @@ the same pool and the second states the before-figure alongside.
 | Brief with no language stack (`b.json`) | fires on **0 of 103** |
 | UI files touched | **none** |
 | Owner's `master` | **untouched** |
+
+---
+
+## Session 3, part 6 — experience, measured and deliberately NOT changed
+
+Experience carries **15–20%** of the score and the coverage panel showed it
+evidenced for 10 of 89. Before touching it, the same question that saved a day
+on the location work: is this a **parser** failure or is the signal simply not
+in the text?
+
+```
+YEARS OF EXPERIENCE, across the 194 unique candidates of run5
+
+  parsed today                   47  (24%)
+  text carries NO year signal   146  (75%)
+  signal present, parser MISSED   1  ( 1%)
+
+  recoverable ceiling: 48/194 (25%)
+```
+
+The one "miss" is `Education. KiiT University. 2011 - 2014`, which is a degree,
+not a tenure — the parser is right to walk past it.
+
+**So the parser is not the problem.** It already recovers 47 of the 48 cases
+that exist, 98%. Three quarters of LinkedIn profiles simply do not state a
+number anywhere Google indexes, and **no parsing work can lift that ceiling**.
+Writing a better extractor here would have been a day spent on a file that is
+already doing its job.
+
+### The structural problem this exposes
+
+`calculateExperienceScore` falls back to title seniority when no number is
+found. On the run5 shortlist that produces:
+
+| | count | score |
+|---|---|---|
+| years stated, inside the range | 13 | 100 |
+| years stated, just outside (≤1.5y) | 6 | 55 |
+| years stated, well outside | 1 | 20 |
+| **no years, titled Senior/Lead** | **48** | **90** |
+| no years, other title | 54 | 50–70 |
+
+**Seven candidates are scored down for stating a number, while 48 score 90 for
+stating nothing and holding a senior title.** Silence outranks honesty — the
+same shape as the location bug, where an unreadable city beat a readable one.
+
+### Why nothing was changed
+
+Three plausible fixes, and **the choice is not a technical one**:
+
+1. Cut the experience weight, since it runs on 24% coverage.
+2. Cap the title fallback below 100, so a stated in-range number always wins.
+3. Leave it: "Senior" is itself a real seniority signal.
+
+Each changes who reaches a recruiter, and the right answer depends on what
+"Senior" means to this business — in India it frequently means 8–12 years,
+which would make 90 wrong for a 4–7 year brief. That is **Suraj's call**, and
+it is on the blocked list with this measurement attached.
+
+It is also being held back for a second reason: every accuracy number here
+rests on 28 labels from one run. Tuning a weight against those labels before
+the fresh `run5` labelling would be fitting the code to rows it has already
+seen. **Measured, recorded, not touched.**
+
+No code changed in this entry.
